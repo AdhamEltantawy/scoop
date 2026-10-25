@@ -93,18 +93,15 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .walk[aria-pressed="true"] .dot { background: var(--danger); animation: pulse 1.4s infinite; border-radius: 2px; }
 @keyframes pulse { 50% { opacity: 0.35; } }
 
-.paint-hint {
+.speed-hint {
   position: fixed;
   left: 50%; transform: translateX(-50%);
   bottom: calc(84px + var(--safe-bottom));
   z-index: 1000;
-  background: var(--accent-2); color: #1d2433;
+  background: var(--danger); color: #fff;
   padding: 6px 12px; border-radius: 10px; font-size: 13px; font-weight: 600;
   display: none;
 }
-body.painting .paint-hint { display: block; }
-.speed-hint { background: var(--danger); color: #fff; }
-body.painting .speed-hint { display: none; }
 body.walking.too-fast .speed-hint { display: block; }
 
 .toast {

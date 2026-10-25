@@ -31,9 +31,6 @@
     <button class="fab" id="btnMenu" aria-label="Menu" title="Menu">
       <svg viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
     </button>
-    <button class="fab" id="btnPaint" aria-label="Mark hexes by tapping" title="Mark hexes by tapping" aria-pressed="false">
-      <svg viewBox="0 0 24 24"><path d="M4 20l4-1 11-11-3-3L5 16l-1 4z"/><path d="M14 7l3 3"/></svg>
-    </button>
     <button class="walk" id="btnWalk" aria-pressed="false">
       <span class="dot"></span><span id="walkLabel">Start walk</span>
     </button>
@@ -42,8 +39,7 @@
     </button>
   </nav>
 
-  <div class="paint-hint" id="paintHint">Tap hexes to mark or unmark them</div>
-  <div class="paint-hint speed-hint">Paused — moving faster than walking</div>
+  <div class="speed-hint">Paused — moving faster than walking</div>
 
   <div class="sheet-backdrop" id="sheetBackdrop" hidden></div>
   <section class="sheet" id="sheet" aria-label="Menu" hidden>

@@ -18,15 +18,15 @@ explored yet.
     hexes from just before it sped up get dropped.
   - It resumes only after a full minute at walking speed, so red lights and
     traffic jams don't count. That minute is then credited to your walk.
-- **Manual marking**: tap the pencil, then tap hexes to mark or unmark places
-  you've already been.
 - **Three hex sizes**: district (~0.7 km²), block (~0.1 km²) and street
   (~0.015 km²). Cells are stored at the street size, so you can switch sizes
   without losing detail.
 - **Exploration stats**: hexes visited, area covered, the share of the current
   view you've explored, plus distance and new hexes for the current walk.
 - **Unexplored grid**: an outline of the hexes you haven't visited yet.
-- **GPX import**: bring in past walks exported from Strava, Komoot, Garmin and similar apps.
+- **GPX import**: bring in past walks exported from Strava, Komoot, Garmin and
+  similar apps. Imported tracks get the same walking-only check, so the file
+  needs timestamps.
 - **Backup / restore** as JSON. All data stays on your device (`localStorage`).
 - **Installable and offline**: add it to your home screen and it opens like an app.
 

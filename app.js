@@ -150,23 +150,6 @@
     return added;
   }
 
-  function unmarkCells(cells) {
-    let removed = 0;
-    for (const c of cells) {
-      if (visited.delete(c)) removed++;
-      if (walk) walk.newCells.delete(c);
-    }
-    if (removed) {
-      scheduleSave();
-      scheduleRender();
-    }
-    return removed;
-  }
-
-  function baseChildren(displayCell) {
-    return settings.res === BASE_RES ? [displayCell] : h3.cellToChildren(displayCell, BASE_RES);
-  }
-
   // ---------- map ----------
 
   const map = L.map('map', {
@@ -615,12 +598,16 @@
 
   // ---------- walk ----------
 
-  function startWalk() {
-    if (!isNative && !ensureWatching()) return;
-    walk = {
-      start: Date.now(), km: 0, newCells: new Set(), lastCell: null, lastFix: null,
+  function newWalk(start) {
+    return {
+      start, km: 0, newCells: new Set(), lastCell: null, lastFix: null,
       history: [], pending: [], moving: false, fastCount: 0, fastSince: 0, slowSince: null, slowFixes: [],
     };
+  }
+
+  function startWalk() {
+    if (!isNative && !ensureWatching()) return;
+    walk = newWalk(Date.now());
     follow = true;
     pendingCenter = !lastPos;
     document.body.classList.add('walking');
@@ -670,24 +657,6 @@
       pendingCenter = true;
       toast('Finding you…');
     }
-  });
-
-  // ---------- paint mode ----------
-
-  let painting = false;
-  $('btnPaint').addEventListener('click', () => {
-    painting = !painting;
-    document.body.classList.toggle('painting', painting);
-    $('btnPaint').setAttribute('aria-pressed', String(painting));
-  });
-
-  map.on('click', (e) => {
-    if (!painting) return;
-    const cell = h3.latLngToCell(e.latlng.lat, e.latlng.lng, settings.res);
-    const children = baseChildren(cell);
-    const isVisited = children.some((c) => visited.has(c));
-    if (isVisited) unmarkCells(children);
-    else markCells(children);
   });
 
   // ---------- menu / settings ----------
@@ -796,44 +765,63 @@
     }
   });
 
-  // GPX import (tracks from Strava, Komoot, Google Takeout exports, etc.)
-  $('btnImportGpx').addEventListener('click', () => $('fileGpx').click());
+  /** Replay a recorded track through the same walking-only filter as a live walk. */
+  function replayTrack(points) {
+    walk = newWalk(points[0].time);
+    for (const p of points) recordFix(L.latLng(p.lat, p.lng), 0, p.time, null);
+    if (!walk.moving) commitPending();
+    const result = { start: walk.start, end: points[points.length - 1].time, km: walk.km, newCells: walk.newCells.size };
+    walk = null;
+    document.body.classList.remove('too-fast');
+    return result;
+  }
+
+  // GPX import (tracks from Strava, Komoot, Garmin, etc.). Points need
+  // timestamps so the walking-speed check can tell walks from drives.
+  $('btnImportGpx').addEventListener('click', () => {
+    if (walk) toast('Stop your walk before importing');
+    else $('fileGpx').click();
+  });
   $('fileGpx').addEventListener('change', async (e) => {
     const files = [...e.target.files];
     e.target.value = '';
     let added = 0;
-    let points = 0;
+    let km = 0;
     const bounds = L.latLngBounds([]);
     for (const file of files) {
       try {
         const doc = new DOMParser().parseFromString(await file.text(), 'application/xml');
         if (doc.querySelector('parsererror')) throw new Error('invalid XML');
-        const segments = [...doc.querySelectorAll('trkseg, rte')];
-        if (!segments.length) segments.push(doc.documentElement);
+        const segments = [...doc.querySelectorAll('trkseg')];
+        if (!segments.length) throw new Error('no recorded track in this file');
         for (const seg of segments) {
-          let last = null;
-          const cells = [];
-          for (const pt of seg.querySelectorAll('trkpt, rtept, wpt')) {
+          const points = [];
+          for (const pt of seg.querySelectorAll('trkpt')) {
             const lat = parseFloat(pt.getAttribute('lat'));
             const lng = parseFloat(pt.getAttribute('lon'));
+            const time = Date.parse(pt.querySelector('time')?.textContent || '');
             if (!Number.isFinite(lat) || !Number.isFinite(lng)) continue;
-            points++;
+            if (!Number.isFinite(time)) throw new Error("no timestamps, so walking can't be verified");
+            points.push({ lat, lng, time });
             bounds.extend([lat, lng]);
-            const cell = h3.latLngToCell(lat, lng, BASE_RES);
-            cells.push(...pathBetween(last, cell));
-            last = cell;
           }
-          added += markCells(cells);
+          if (!points.length) continue;
+          const result = replayTrack(points);
+          added += result.newCells;
+          km += result.km;
+          if (result.km > 0 && !walks.some((w) => w.start === result.start)) walks.push(result);
         }
       } catch (err) {
         toast(`Skipped ${file.name}: ${err.message}`, 4000);
       }
     }
-    if (points) {
+    if (bounds.isValid()) {
+      walks.sort((a, b) => a.start - b.start);
       saveNow();
+      render();
       closeSheet();
-      if (bounds.isValid()) map.fitBounds(bounds, { padding: [40, 40] });
-      toast(`Imported ${points.toLocaleString()} points — ${added.toLocaleString()} new cells`, 4000);
+      map.fitBounds(bounds, { padding: [40, 40] });
+      toast(`Imported ${km.toFixed(2)} km of walking — ${added.toLocaleString()} new cells`, 4000);
     }
   });
 
@@ -871,7 +859,6 @@
   if (App) {
     App.addListener('backButton', () => {
       if (!$('sheet').hidden) closeSheet();
-      else if (painting) $('btnPaint').click();
       else App.minimizeApp();
     });
   }
