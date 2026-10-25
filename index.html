@@ -82,10 +82,11 @@
     <input type="file" id="fileJson" accept=".json,application/json" hidden>
 
     <p class="fine">Your data stays on this device. Export a backup now and then.
-      Keep the screen on while walking: phones pause location in background tabs.</p>
+      <span id="walkTip">Keep the screen on while walking: phones pause location in background tabs.</span></p>
     <button class="close" id="btnClose">Done</button>
   </section>
 
+  <script src="vendor/capacitor.js"></script>
   <script src="vendor/leaflet.js"></script>
   <script src="vendor/h3-js.umd.js"></script>
   <script src="app.js"></script>

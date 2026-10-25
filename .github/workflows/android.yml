@@ -1,0 +1,71 @@
+name: Android APK
+
+on:
+  push:
+    paths-ignore: ['**.md']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+          cache: gradle
+
+      - name: Build web app and sync into Android project
+        run: |
+          npm ci
+          npm run android:sync
+
+      # Optional: sign with your own key by adding SCOOP_KEYSTORE_BASE64 and
+      # SCOOP_KEYSTORE_PASSWORD repository secrets. Otherwise the key in the
+      # repo is used.
+      - name: Use private signing key if configured
+        env:
+          KEYSTORE_B64: ${{ secrets.SCOOP_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.SCOOP_KEYSTORE_PASSWORD }}
+        if: env.KEYSTORE_B64 != ''
+        run: |
+          echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/scoop.keystore"
+          echo "SCOOP_KEYSTORE=$RUNNER_TEMP/scoop.keystore" >> "$GITHUB_ENV"
+          echo "SCOOP_KEYSTORE_PASSWORD=$KEYSTORE_PASSWORD" >> "$GITHUB_ENV"
+          echo "SCOOP_KEY_PASSWORD=$KEYSTORE_PASSWORD" >> "$GITHUB_ENV"
+
+      - name: Build APK
+        working-directory: android
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleRelease -PversionCode=${{ github.run_number }} --no-daemon
+          cp app/build/outputs/apk/release/app-release.apk "$GITHUB_WORKSPACE/scoop.apk"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: scoop-apk
+          path: scoop.apk
+
+      # Publish to a GitHub Release so the APK can be downloaded straight
+      # from your phone's browser (Releases → latest → scoop.apk).
+      - name: Publish release
+        if: github.ref_name == github.event.repository.default_branch
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v1.0.${{ github.run_number }}
+          name: Scoop 1.0.${{ github.run_number }}
+          make_latest: true
+          files: scoop.apk
+          body: |
+            Download **scoop.apk** below on your Android phone and open it to install.
+            Built from ${{ github.sha }}.

@@ -1,0 +1,8 @@
+{
+  "appId": "io.github.adhameltantawy.scoop",
+  "appName": "Scoop",
+  "webDir": "www",
+  "android": {
+    "backgroundColor": "#1d2433"
+  }
+}

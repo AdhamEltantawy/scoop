@@ -23,7 +23,44 @@ explored yet.
 - **Backup / restore** as JSON. All data stays on your device (`localStorage`).
 - **Installable and offline**: add it to your home screen and it opens like an app.
 
-## Running it
+## Android app
+
+Every push builds an installable APK with GitHub Actions
+(`.github/workflows/android.yml`) and publishes it as a GitHub Release.
+
+**To install:** on your phone, open the repo's **Releases** page, download
+`scoop.apk` from the latest release and open it. The first time, Android asks
+you to allow installs from your browser. Newer APKs install over the old one
+and keep your data.
+
+The Android app keeps recording a walk with the screen off. It shows a
+notification while a walk is running. When asked, allow location access
+(*While using the app* is enough) and notifications.
+
+It's the same web app wrapped with [Capacitor](https://capacitorjs.com), plus:
+- background GPS via `@capacitor-community/background-geolocation`
+- backups exported through Android's share sheet
+- the back button minimizes the app instead of quitting it, so walks keep going
+
+**Building locally** (needs Node 22, JDK 21 and the Android SDK):
+
+```sh
+npm ci
+npm run android:sync          # copies the web app into android/
+cd android && ./gradlew assembleRelease
+# → android/app/build/outputs/apk/release/app-release.apk
+```
+
+or run `npm run android:open` to work in Android Studio.
+
+**Signing:** builds are signed with `android/app/scoop.keystore`, which is
+checked into the repo so every build can upgrade the previous one. That's fine
+for a personal sideloaded app. To use a private key instead, add the
+`SCOOP_KEYSTORE_BASE64` and `SCOOP_KEYSTORE_PASSWORD` repository secrets (the
+key alias must be `scoop`). Switching keys means uninstalling once, so export a
+backup first.
+
+## Running it in a browser
 
 It's a static site with no build step. Leaflet and h3-js are included in
 `vendor/`.
@@ -54,6 +91,8 @@ Screen*.
 | `index.html`, `style.css` | UI |
 | `app.js` | Map, H3 logic, GPS tracking, storage |
 | `sw.js`, `manifest.webmanifest`, `icons/` | Install / offline support |
-| `vendor/` | Leaflet 1.9.4 and h3-js 4.1.0 (with licenses) |
+| `vendor/` | Leaflet 1.9.4, h3-js 4.1.0, Capacitor core runtime (with licenses) |
+| `android/`, `capacitor.config.json`, `scripts/build-web.mjs` | Android app (Capacitor) |
+| `assets/` | Source images for the Android icon and splash screen |
 
 Map tiles © OpenStreetMap contributors, © CARTO.

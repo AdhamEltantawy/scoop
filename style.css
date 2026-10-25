@@ -6,8 +6,9 @@
   --accent: #ff7a3d;
   --accent-2: #ffd166;
   --danger: #ff5c6c;
-  --safe-bottom: env(safe-area-inset-bottom, 0px);
-  --safe-top: env(safe-area-inset-top, 0px);
+  /* Capacitor injects --safe-area-inset-* on Android WebViews where env() is unreliable. */
+  --safe-bottom: var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px));
+  --safe-top: var(--safe-area-inset-top, env(safe-area-inset-top, 0px));
 }
 
 * { box-sizing: border-box; }

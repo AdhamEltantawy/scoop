@@ -131,7 +131,9 @@
       }
     }
     if (added) {
-      scheduleSave();
+      // Timers are throttled in the background, so save right away there.
+      if (document.hidden) saveNow();
+      else scheduleSave();
       scheduleRender();
     }
     return added;
@@ -327,9 +329,21 @@
     scheduleRender();
   });
 
+  // ---------- native (Android app) ----------
+
+  // In the Android app (Capacitor), walks use a background-capable GPS watcher,
+  // so tracking keeps going with the screen off. In a browser these are null.
+  const isNative = !!(window.Capacitor && window.Capacitor.isNativePlatform());
+  const plugin = (name) => (isNative ? window.capacitorExports.registerPlugin(name) : null);
+  const BackgroundGeolocation = plugin('BackgroundGeolocation');
+  const App = plugin('App');
+  const Filesystem = plugin('Filesystem');
+  const Share = plugin('Share');
+
   // ---------- location ----------
 
   let watchId = null;
+  let nativeWatcherId = null;
   let lastPos = null;
   let follow = true;
   let pendingCenter = false;
@@ -348,12 +362,52 @@
     return true;
   }
 
+  function stopWebWatch() {
+    if (watchId === null) return;
+    navigator.geolocation.clearWatch(watchId);
+    watchId = null;
+  }
+
+  function startNativeWatcher() {
+    BackgroundGeolocation.addWatcher({
+      backgroundTitle: 'Scoop is recording your walk',
+      backgroundMessage: 'Tap to return to the map',
+      requestPermissions: true,
+      stale: false,
+      distanceFilter: 0,
+    }, (loc, err) => {
+      if (err) {
+        if (err.code === 'NOT_AUTHORIZED') {
+          stopWalk();
+          if (confirm('Scoop needs location permission to record walks. Open settings?')) {
+            BackgroundGeolocation.openSettings();
+          }
+        }
+        return;
+      }
+      if (!loc) return;
+      onFix({
+        coords: { latitude: loc.latitude, longitude: loc.longitude, accuracy: loc.accuracy },
+        timestamp: loc.time || Date.now(),
+      });
+    }).then((id) => {
+      // The walk may have been stopped while permissions were being requested.
+      if (walk) nativeWatcherId = id;
+      else BackgroundGeolocation.removeWatcher({ id });
+    });
+  }
+
+  function stopNativeWatcher() {
+    if (nativeWatcherId === null) return;
+    BackgroundGeolocation.removeWatcher({ id: nativeWatcherId });
+    nativeWatcherId = null;
+  }
+
   function onGeoError(err) {
     if (err.code === err.PERMISSION_DENIED) {
       toast('Location permission denied — enable it in your browser settings', 4000);
-      if (walk) stopWalk();
-      navigator.geolocation.clearWatch(watchId);
-      watchId = null;
+      if (walk && !isNative) stopWalk();
+      stopWebWatch();
     } else if (walk && (!lastPos || Date.now() - lastPos.time > 15000)) {
       toast('Still looking for GPS…');
     }
@@ -431,7 +485,8 @@
 
   let wakeLock = null;
   async function requestWakeLock() {
-    if (!('wakeLock' in navigator) || !walk) return;
+    // The Android app tracks with the screen off, so it doesn't need this.
+    if (isNative || !('wakeLock' in navigator) || !walk) return;
     try {
       wakeLock = await navigator.wakeLock.request('screen');
     } catch (e) {
@@ -450,7 +505,7 @@
   // ---------- walk ----------
 
   function startWalk() {
-    if (!ensureWatching()) return;
+    if (!isNative && !ensureWatching()) return;
     walk = { start: Date.now(), km: 0, newCells: new Set(), lastCell: null, lastFix: null };
     follow = true;
     pendingCenter = !lastPos;
@@ -458,11 +513,15 @@
     $('btnWalk').setAttribute('aria-pressed', 'true');
     $('walkLabel').textContent = 'Stop walk';
     requestWakeLock();
+    if (isNative) {
+      stopWebWatch();
+      startNativeWatcher();
+    }
     if (lastPos) {
       map.setView(lastPos.latlng, Math.max(map.getZoom(), 16));
       recordFix(lastPos.latlng, lastPos.accuracy, Date.now());
     }
-    toast('Walk started — keep this screen open');
+    toast(isNative ? 'Walk started — you can lock your phone' : 'Walk started — keep this screen open');
     scheduleRender();
   }
 
@@ -477,6 +536,10 @@
     $('btnWalk').setAttribute('aria-pressed', 'false');
     $('walkLabel').textContent = 'Start walk';
     if (wakeLock) { wakeLock.release().catch(() => {}); wakeLock = null; }
+    if (isNative) {
+      stopNativeWatcher();
+      ensureWatching();
+    }
     toast(`Walk saved: ${summary.km.toFixed(2)} km, ${newDisplay} new hex${newDisplay === 1 ? '' : 'es'}`, 4000);
     scheduleRender();
   }
@@ -547,16 +610,30 @@
   });
 
   // Backup
-  $('btnExport').addEventListener('click', () => {
+  $('btnExport').addEventListener('click', async () => {
     saveNow();
     const data = {
       app: 'scoop', version: 1, exported: new Date().toISOString(), baseRes: BASE_RES,
       cells: Object.fromEntries(visited), walks,
     };
+    const name = `scoop-backup-${new Date().toISOString().slice(0, 10)}.json`;
+    if (isNative) {
+      // The Android WebView can't download files, so hand it to the share sheet
+      // (save to Drive, Files, email, …).
+      try {
+        const { uri } = await Filesystem.writeFile({
+          path: name, data: JSON.stringify(data), directory: 'CACHE', encoding: 'utf8',
+        });
+        await Share.share({ title: 'Scoop backup', files: [uri] });
+      } catch (err) {
+        if (!/cancel/i.test(err.message || '')) toast('Could not export: ' + err.message, 4000);
+      }
+      return;
+    }
     const blob = new Blob([JSON.stringify(data)], { type: 'application/json' });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
-    a.download = `scoop-backup-${new Date().toISOString().slice(0, 10)}.json`;
+    a.download = name;
     document.body.appendChild(a);
     a.click();
     a.remove();
@@ -656,7 +733,21 @@
     }).catch(() => {});
   }
 
-  if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
+  if (isNative) {
+    $('walkTip').textContent = 'Walks keep recording with the screen off — look for the notification.';
+  }
+
+  // Android back button: close whatever is open, otherwise send the app to the
+  // background (instead of quitting) so a walk in progress keeps recording.
+  if (App) {
+    App.addListener('backButton', () => {
+      if (!$('sheet').hidden) closeSheet();
+      else if (painting) $('btnPaint').click();
+      else App.minimizeApp();
+    });
+  }
+
+  if (!isNative && 'serviceWorker' in navigator && location.protocol.startsWith('http')) {
     navigator.serviceWorker.register('sw.js').catch(() => {});
   }
 

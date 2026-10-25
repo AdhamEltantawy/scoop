@@ -1,0 +1,22 @@
+{
+  "name": "scoop",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Explore your city on foot, one hexagon at a time.",
+  "scripts": {
+    "build": "node scripts/build-web.mjs",
+    "android:sync": "npm run build && cap sync android",
+    "android:open": "cap open android"
+  },
+  "dependencies": {
+    "@capacitor-community/background-geolocation": "1.3.1",
+    "@capacitor/android": "8.5.3",
+    "@capacitor/app": "8.1.2",
+    "@capacitor/core": "8.5.3",
+    "@capacitor/filesystem": "8.1.5",
+    "@capacitor/share": "8.0.3"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "8.5.3"
+  }
+}
