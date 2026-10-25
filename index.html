@@ -43,6 +43,7 @@
   </nav>
 
   <div class="paint-hint" id="paintHint">Tap hexes to mark or unmark them</div>
+  <div class="paint-hint speed-hint">Paused — moving faster than walking</div>
 
   <div class="sheet-backdrop" id="sheetBackdrop" hidden></div>
   <section class="sheet" id="sheet" aria-label="Menu" hidden>
@@ -70,6 +71,14 @@
     <label class="row">
       <span>Show unexplored grid</span>
       <input type="checkbox" id="chkGrid">
+    </label>
+
+    <label class="row">
+      <span>Count</span>
+      <select id="selActivity">
+        <option value="walk">Walking only (up to 9 km/h)</option>
+        <option value="run">Walking &amp; running (up to 16 km/h)</option>
+      </select>
     </label>
 
     <label class="row">

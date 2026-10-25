@@ -11,9 +11,18 @@
   const STORAGE_KEY = 'scoop.v1';
   const SETTINGS_KEY = 'scoop.settings.v1';
   const MAX_VIEW_CELLS = 6000;      // skip grid / "% of view" beyond this
-  const MAX_PATH_STEPS = 20;        // fill gaps between fixes up to ~20 cells
-  const MAX_WALK_SPEED = 7;         // m/s; faster than this = probably a vehicle
+  const MAX_PATH_STEPS = 20;        // GPX import: fill gaps between points up to ~20 cells
+  const MAX_LIVE_PATH_STEPS = 8;    // live walks: fill short GPS dropouts only
   const MIN_STEP_METERS = 5;        // ignore GPS jitter for distance
+
+  // Walking-only detection. Speed comes from the GPS chip (Doppler) when it
+  // reports one, otherwise from distance covered over the last ~20 s.
+  const SPEED_LIMITS = { walk: 2.5, run: 4.5 }; // m/s: 9 km/h, 16 km/h
+  const FAST_FIXES_TO_PAUSE = 3;    // consecutive too-fast fixes before pausing
+  const SLOW_MS_TO_RESUME = 60000;  // must be at walking speed this long to resume
+  const PENDING_MS = 30000;         // hold new cells this long before committing,
+                                    // so a vehicle pulling away doesn't count
+  const SPEED_WINDOW_MS = 20000;
 
   const COLORS = {
     visited: '#ff7a3d',
@@ -50,7 +59,7 @@
   const walks = Array.isArray(stored.walks) ? stored.walks : [];
 
   const settings = Object.assign(
-    { res: 9, grid: true, accuracy: 40, basemap: 'osm', view: null },
+    { res: 9, grid: true, accuracy: 40, basemap: 'osm', activity: 'walk', view: null },
     loadJSON(SETTINGS_KEY, {})
   );
 
@@ -95,10 +104,10 @@
   }
 
   /** Cells from a to b inclusive, or just [b] when they're too far apart. */
-  function pathBetween(a, b) {
+  function pathBetween(a, b, maxSteps = MAX_PATH_STEPS) {
     if (!a || a === b) return [b];
     try {
-      if (h3.gridDistance(a, b) <= MAX_PATH_STEPS) return h3.gridPathCells(a, b);
+      if (h3.gridDistance(a, b) <= maxSteps) return h3.gridPathCells(a, b);
     } catch (e) {
       // pentagons or very distant cells — fall through
     }
@@ -117,7 +126,9 @@
 
   // ---------- marking ----------
 
-  let walk = null; // { start, km, newCells:Set, lastCell, lastFix }
+  // { start, km, newCells:Set, lastCell, lastFix, history, pending, moving,
+  //   fastCount, fastSince, slowSince, slowFixes }
+  let walk = null;
 
   /** Mark base-res cells as visited. Returns how many were new. */
   function markCells(cells) {
@@ -265,7 +276,10 @@
     for (const c of visited.keys()) display.add(toDisplay(c));
 
     const walkDisplay = new Set();
-    if (walk) for (const c of walk.newCells) walkDisplay.add(toDisplay(c));
+    if (walk) {
+      for (const c of walk.newCells) walkDisplay.add(toDisplay(c));
+      for (const p of walk.pending) for (const c of p.cells) if (!visited.has(c)) walkDisplay.add(toDisplay(c));
+    }
 
     // Only draw what's near the viewport — keeps big histories fast.
     const bounds = map.getBounds().pad(0.5);
@@ -337,7 +351,7 @@
     $('statView').textContent = viewPct === null ? '–' : (viewPct < 10 && viewPct > 0 ? viewPct.toFixed(1) : Math.round(viewPct)) + '%';
     if (walk) {
       $('statWalkNew').textContent = walkDisplay.size.toLocaleString();
-      $('statWalkDist').textContent = walk.km.toFixed(2);
+      $('statWalkDist').textContent = (walk.km + walk.pending.reduce((a, p) => a + p.km, 0)).toFixed(2);
     }
 
     updateHereHex();
@@ -418,7 +432,7 @@
       }
       if (!loc) return;
       onFix({
-        coords: { latitude: loc.latitude, longitude: loc.longitude, accuracy: loc.accuracy },
+        coords: { latitude: loc.latitude, longitude: loc.longitude, accuracy: loc.accuracy, speed: loc.speed },
         timestamp: loc.time || Date.now(),
       });
     }).then((id) => {
@@ -445,7 +459,7 @@
   }
 
   function onFix(pos) {
-    const { latitude: lat, longitude: lng, accuracy } = pos.coords;
+    const { latitude: lat, longitude: lng, accuracy, speed } = pos.coords;
     const here = L.latLng(lat, lng);
     lastPos = { latlng: here, accuracy, time: pos.timestamp };
 
@@ -462,41 +476,107 @@
     }
     updateHereHex();
 
-    if (walk) recordFix(here, accuracy, pos.timestamp);
+    if (walk) recordFix(here, accuracy, pos.timestamp, speed);
   }
 
-  function recordFix(here, accuracy, time) {
+  /** Best guess at current speed in m/s, or null if not enough data yet. */
+  function currentSpeed(time, reported) {
+    if (typeof reported === 'number' && Number.isFinite(reported) && reported >= 0) return reported;
+    const h = walk.history;
+    const old = h.find((f) => time - f.time <= SPEED_WINDOW_MS);
+    if (!old || time - old.time < 8000) return null;
+    return haversine(old.latlng, h[h.length - 1].latlng) / ((time - old.time) / 1000);
+  }
+
+  function setMoving(moving) {
+    walk.moving = moving;
+    document.body.classList.toggle('too-fast', moving);
+  }
+
+  /** Commit pending cells recorded before `cutoff` (all of them by default). */
+  function commitPending(cutoff = Infinity) {
+    while (walk.pending.length && walk.pending[0].time <= cutoff) {
+      const p = walk.pending.shift();
+      walk.km += p.km;
+      markCells(p.cells);
+    }
+  }
+
+  function recordFix(here, accuracy, time, reportedSpeed) {
     if (accuracy > settings.accuracy) {
       toast(`Waiting for better GPS (±${Math.round(accuracy)} m)`);
       return;
     }
-    const cell = h3.latLngToCell(here.lat, here.lng, BASE_RES);
-    const prev = walk.lastFix;
+    walk.history.push({ latlng: here, time });
+    while (walk.history.length && time - walk.history[0].time > SPEED_WINDOW_MS * 2) walk.history.shift();
 
-    if (prev) {
-      const d = haversine(prev.latlng, here);
-      const dt = Math.max(1, (time - prev.time) / 1000);
-      if (d / dt > MAX_WALK_SPEED && d > 50) {
-        // Probably on a bus/bike/train — don't paint the ride.
-        toast('Moving fast — not marking until you slow down');
-        walk.lastFix = { latlng: here, time };
-        walk.lastCell = cell;
-        return;
+    const speed = currentSpeed(time, reportedSpeed);
+    const tooFast = speed !== null && speed > SPEED_LIMITS[settings.activity];
+    const cell = h3.latLngToCell(here.lat, here.lng, BASE_RES);
+
+    if (walk.moving) {
+      // In a vehicle: wait for a sustained stretch at walking speed, so red
+      // lights and traffic jams don't count. Once confirmed, that stretch is
+      // credited as walking.
+      if (tooFast) {
+        walk.slowSince = null;
+        walk.slowFixes = [];
+      } else {
+        if (walk.slowSince === null) walk.slowSince = time;
+        walk.slowFixes.push({ latlng: here, cell, time });
       }
-      if (d < MIN_STEP_METERS) {
-        if (cell !== walk.lastCell) {
-          markCells([cell]);
-          walk.lastCell = cell;
-        }
-        return;
+      if (walk.slowSince !== null && time - walk.slowSince >= SLOW_MS_TO_RESUME) {
+        setMoving(false);
+        walk.fastCount = 0;
+        walk.lastCell = null;
+        walk.lastFix = null;
+        for (const f of walk.slowFixes) addStep(f.latlng, f.cell, f.time);
+        walk.slowFixes = [];
+        commitPending(time - PENDING_MS);
+        scheduleRender();
       }
-      walk.km += d / 1000;
+      return;
     }
 
-    markCells(pathBetween(walk.lastCell, cell));
+    if (tooFast) {
+      if (walk.fastCount === 0) walk.fastSince = time;
+      walk.fastCount++;
+    } else {
+      walk.fastCount = 0;
+    }
+    if (walk.fastCount >= FAST_FIXES_TO_PAUSE) {
+      // Probably a car/bus/bike/train. Keep the walk up to shortly before the
+      // speed rose, and drop the rest: that was the vehicle pulling away.
+      commitPending(walk.fastSince - 10000);
+      walk.pending = [];
+      walk.lastCell = null;
+      walk.lastFix = null;
+      walk.slowSince = null;
+      walk.slowFixes = [];
+      setMoving(true);
+      scheduleRender();
+      return;
+    }
+
+    addStep(here, cell, time);
+    commitPending(time - PENDING_MS);
+    scheduleRender();
+  }
+
+  /** Queue the cells walked to reach `here`, plus the distance covered. */
+  function addStep(here, cell, time) {
+    const prev = walk.lastFix;
+    if (prev && haversine(prev.latlng, here) < MIN_STEP_METERS) {
+      if (cell !== walk.lastCell) {
+        walk.pending.push({ time, cells: [cell], km: 0 });
+        walk.lastCell = cell;
+      }
+      return;
+    }
+    const km = prev ? haversine(prev.latlng, here) / 1000 : 0;
+    walk.pending.push({ time, cells: pathBetween(walk.lastCell, cell, MAX_LIVE_PATH_STEPS), km });
     walk.lastCell = cell;
     walk.lastFix = { latlng: here, time };
-    scheduleRender();
   }
 
   function updateHereHex() {
@@ -537,7 +617,10 @@
 
   function startWalk() {
     if (!isNative && !ensureWatching()) return;
-    walk = { start: Date.now(), km: 0, newCells: new Set(), lastCell: null, lastFix: null };
+    walk = {
+      start: Date.now(), km: 0, newCells: new Set(), lastCell: null, lastFix: null,
+      history: [], pending: [], moving: false, fastCount: 0, fastSince: 0, slowSince: null, slowFixes: [],
+    };
     follow = true;
     pendingCenter = !lastPos;
     document.body.classList.add('walking');
@@ -550,7 +633,7 @@
     }
     if (lastPos) {
       map.setView(lastPos.latlng, Math.max(map.getZoom(), 16));
-      recordFix(lastPos.latlng, lastPos.accuracy, Date.now());
+      recordFix(lastPos.latlng, lastPos.accuracy, Date.now(), null);
     }
     toast(isNative ? 'Walk started — you can lock your phone' : 'Walk started — keep this screen open');
     scheduleRender();
@@ -558,6 +641,8 @@
 
   function stopWalk() {
     if (!walk) return;
+    if (!walk.moving) commitPending();
+    document.body.classList.remove('too-fast');
     const summary = { start: walk.start, end: Date.now(), km: +walk.km.toFixed(3), newCells: walk.newCells.size };
     if (summary.km > 0 || summary.newCells > 0) walks.push(summary);
     const newDisplay = new Set([...walk.newCells].map(toDisplay)).size;
@@ -623,6 +708,12 @@
   $('chkGrid').checked = settings.grid;
   $('selAccuracy').value = String(settings.accuracy);
   $('selBasemap').value = BASEMAPS[settings.basemap] ? settings.basemap : 'osm';
+
+  $('selActivity').value = SPEED_LIMITS[settings.activity] ? settings.activity : 'walk';
+  $('selActivity').addEventListener('change', (e) => {
+    settings.activity = e.target.value;
+    saveSettings();
+  });
 
   $('selBasemap').addEventListener('change', (e) => {
     settings.basemap = e.target.value;
@@ -750,7 +841,7 @@
     if (!confirm('Erase every visited hex and walk on this device? This cannot be undone.')) return;
     visited.clear();
     walks.length = 0;
-    if (walk) walk.newCells.clear();
+    if (walk) { walk.newCells.clear(); walk.pending = []; }
     saveNow();
     render();
     closeSheet();

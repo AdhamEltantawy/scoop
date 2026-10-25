@@ -103,6 +103,9 @@ button { font: inherit; color: inherit; cursor: pointer; }
   display: none;
 }
 body.painting .paint-hint { display: block; }
+.speed-hint { background: var(--danger); color: #fff; }
+body.painting .speed-hint { display: none; }
+body.walking.too-fast .speed-hint { display: block; }
 
 .toast {
   position: fixed;

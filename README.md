@@ -9,8 +9,15 @@ explored yet.
 
 - **Walk tracking**: tap *Start walk* and the app follows your GPS, filling in
   each hexagon you pass through. Gaps between GPS fixes are filled along the
-  hex grid, and fixes that are too inaccurate or too fast (bus, bike, train)
-  are skipped.
+  hex grid, and inaccurate fixes are skipped.
+- **Walking only**: the app pauses marking when you go faster than
+  walking speed (9 km/h, or 16 km/h if you allow running). It uses the speed
+  your GPS reports, or your average speed over the last 20 s.
+  - It pauses after 3 fast readings in a row, so one GPS glitch doesn't count.
+  - Hexes are held for 30 s before they're saved. When a car pulls away, the
+    hexes from just before it sped up get dropped.
+  - It resumes only after a full minute at walking speed, so red lights and
+    traffic jams don't count. That minute is then credited to your walk.
 - **Manual marking**: tap the pencil, then tap hexes to mark or unmark places
   you've already been.
 - **Three hex sizes**: district (~0.7 km²), block (~0.1 km²) and street
