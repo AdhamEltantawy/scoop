@@ -50,7 +50,7 @@
   const walks = Array.isArray(stored.walks) ? stored.walks : [];
 
   const settings = Object.assign(
-    { res: 9, grid: true, accuracy: 40, view: null },
+    { res: 9, grid: true, accuracy: 40, basemap: 'osm', view: null },
     loadJSON(SETTINGS_KEY, {})
   );
 
@@ -164,11 +164,42 @@
     attributionControl: true,
   });
 
-  L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
-    maxZoom: 20,
-    subdomains: 'abcd',
-    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a>',
-  }).addTo(map);
+  // Basemaps that need no API key. Pick another in the menu if one stops working.
+  const OSM_ATTR = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors';
+  const ESRI = 'https://server.arcgisonline.com/ArcGIS/rest/services';
+  const BASEMAPS = {
+    osm: {
+      url: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+      options: { maxZoom: 19, attribution: OSM_ATTR },
+    },
+    hot: {
+      url: 'https://{s}.tile.openstreetmap.fr/hot/{z}/{x}/{y}.png',
+      options: { maxZoom: 19, subdomains: 'abc', attribution: OSM_ATTR + ', Humanitarian style by HOT' },
+    },
+    streets: {
+      url: ESRI + '/World_Street_Map/MapServer/tile/{z}/{y}/{x}',
+      options: { maxZoom: 19, attribution: 'Tiles &copy; Esri' },
+    },
+    satellite: {
+      url: ESRI + '/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+      options: { maxZoom: 19, attribution: 'Imagery &copy; Esri, Maxar, Earthstar Geographics' },
+    },
+  };
+
+  let baseLayer = null;
+  function setBasemap(key) {
+    const def = BASEMAPS[key] || BASEMAPS.osm;
+    if (baseLayer) map.removeLayer(baseLayer);
+    let loaded = 0;
+    let failed = 0;
+    baseLayer = L.tileLayer(def.url, Object.assign({ referrerPolicy: 'strict-origin-when-cross-origin' }, def.options))
+      .on('tileload', () => { loaded++; })
+      .on('tileerror', () => {
+        if (++failed === 6 && loaded === 0) toast('Map not loading — try another map style in the menu', 5000);
+      })
+      .addTo(map);
+  }
+  setBasemap(settings.basemap);
 
   if (settings.view) {
     map.setView([settings.view.lat, settings.view.lng], settings.view.zoom);
@@ -591,6 +622,13 @@
   $('selRes').value = String(settings.res);
   $('chkGrid').checked = settings.grid;
   $('selAccuracy').value = String(settings.accuracy);
+  $('selBasemap').value = BASEMAPS[settings.basemap] ? settings.basemap : 'osm';
+
+  $('selBasemap').addEventListener('change', (e) => {
+    settings.basemap = e.target.value;
+    saveSettings();
+    setBasemap(settings.basemap);
+  });
 
   $('selRes').addEventListener('change', (e) => {
     settings.res = Number(e.target.value);

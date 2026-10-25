@@ -95,4 +95,4 @@ Screen*.
 | `android/`, `capacitor.config.json`, `scripts/build-web.mjs` | Android app (Capacitor) |
 | `assets/` | Source images for the Android icon and splash screen |
 
-Map tiles © OpenStreetMap contributors, © CARTO.
+Map tiles © OpenStreetMap contributors (or © Esri, depending on the map style you pick).
