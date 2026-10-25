@@ -1,0 +1,16 @@
+{
+  "name": "Scoop — explore on foot",
+  "short_name": "Scoop",
+  "description": "Explore your city on foot, one hexagon at a time.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#1d2433",
+  "theme_color": "#1d2433",
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "icons/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ]
+}

@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Scoop</title>
+  <meta name="description" content="Explore your city on foot, one hexagon at a time.">
+  <meta name="theme-color" content="#1d2433">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icons/icon-192.png">
+  <link rel="stylesheet" href="vendor/leaflet.css">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="map"></div>
+
+  <header class="stats" id="stats">
+    <div class="stat"><span class="num" id="statCells">0</span><span class="lbl">hexes</span></div>
+    <div class="stat"><span class="num" id="statArea">0</span><span class="lbl">km²</span></div>
+    <div class="stat"><span class="num" id="statView">–</span><span class="lbl">of view</span></div>
+    <div class="stat walk-only"><span class="num" id="statWalkNew">0</span><span class="lbl">new</span></div>
+    <div class="stat walk-only"><span class="num" id="statWalkDist">0</span><span class="lbl">km</span></div>
+  </header>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+  <nav class="controls">
+    <button class="fab" id="btnMenu" aria-label="Menu" title="Menu">
+      <svg viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
+    </button>
+    <button class="fab" id="btnPaint" aria-label="Mark hexes by tapping" title="Mark hexes by tapping" aria-pressed="false">
+      <svg viewBox="0 0 24 24"><path d="M4 20l4-1 11-11-3-3L5 16l-1 4z"/><path d="M14 7l3 3"/></svg>
+    </button>
+    <button class="walk" id="btnWalk" aria-pressed="false">
+      <span class="dot"></span><span id="walkLabel">Start walk</span>
+    </button>
+    <button class="fab" id="btnLocate" aria-label="Center on my location" title="Center on my location">
+      <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg>
+    </button>
+  </nav>
+
+  <div class="paint-hint" id="paintHint">Tap hexes to mark or unmark them</div>
+
+  <div class="sheet-backdrop" id="sheetBackdrop" hidden></div>
+  <section class="sheet" id="sheet" aria-label="Menu" hidden>
+    <h2>Scoop</h2>
+
+    <label class="row">
+      <span>Hex size</span>
+      <select id="selRes">
+        <option value="8">Large · ~0.7 km² (district)</option>
+        <option value="9">Medium · ~0.1 km² (block)</option>
+        <option value="10">Small · ~0.015 km² (street)</option>
+      </select>
+    </label>
+
+    <label class="row">
+      <span>Show unexplored grid</span>
+      <input type="checkbox" id="chkGrid">
+    </label>
+
+    <label class="row">
+      <span>Ignore GPS fixes worse than</span>
+      <select id="selAccuracy">
+        <option value="25">25 m</option>
+        <option value="40">40 m</option>
+        <option value="75">75 m</option>
+        <option value="150">150 m</option>
+      </select>
+    </label>
+
+    <div class="buttons">
+      <button id="btnImportGpx">Import GPX…</button>
+      <button id="btnExport">Export backup</button>
+      <button id="btnImport">Restore backup…</button>
+      <button id="btnClear" class="danger">Clear everything</button>
+    </div>
+    <input type="file" id="fileGpx" accept=".gpx,application/gpx+xml,application/xml,text/xml" multiple hidden>
+    <input type="file" id="fileJson" accept=".json,application/json" hidden>
+
+    <p class="fine">Your data stays on this device. Export a backup now and then.
+      Keep the screen on while walking: phones pause location in background tabs.</p>
+    <button class="close" id="btnClose">Done</button>
+  </section>
+
+  <script src="vendor/leaflet.js"></script>
+  <script src="vendor/h3-js.umd.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
