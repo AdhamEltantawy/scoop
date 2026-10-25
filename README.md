@@ -79,10 +79,13 @@ python3 -m http.server 8000
 # open http://localhost:8000
 ```
 
-**On your phone:** browsers only allow GPS on HTTPS, so host it somewhere. The
-easiest option is GitHub Pages: *Settings → Pages → Deploy from a branch*, pick
-the branch and `/ (root)`. Open the URL on your phone, then use *Add to Home
-Screen*.
+**On your phone (Android or iPhone):** open
+<https://adhameltantawy.github.io/scoop/> and use *Add to Home Screen*. Every push
+redeploys it via `.github/workflows/pages.yml`. One-time setup: *Settings → Pages
+→ Source: GitHub Actions*.
+
+On iPhone, keep the app open with the screen on while walking: iOS stops giving
+location to web apps once the screen locks.
 
 ## Tips
 

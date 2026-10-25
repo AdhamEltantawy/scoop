@@ -31,9 +31,8 @@ jobs:
       # Copies only the web app files into www/ (no npm install needed).
       - run: node scripts/build-web.mjs
 
+      # Requires Settings → Pages → Source: "GitHub Actions" (one-time).
       - uses: actions/configure-pages@v5
-        with:
-          enablement: true
 
       - uses: actions/upload-pages-artifact@v3
         with:
