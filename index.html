@@ -33,7 +33,7 @@
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
   <nav class="side-controls">
-    <button class="fab community-only" id="btnCommunity" aria-label="Community" title="Community">
+    <button class="fab" id="btnCommunity" aria-label="Community" title="Community">
       <svg viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.2"/><path d="M3.5 19c0-3 2.5-5 5.5-5s5.5 2 5.5 5"/><circle cx="17" cy="9" r="2.4"/><path d="M15.5 14.2c2.8-.4 5 1.4 5 4.3"/></svg>
     </button>
     <button class="fab checkin-only" id="btnCheckin" aria-label="Check in here" title="Check in here">
@@ -118,7 +118,7 @@
     <input type="file" id="fileJson" accept=".json,application/json" hidden>
 
     <p class="fine">Your map is stored on this device — export a backup now and then.
-      <span id="communityNote">If you sign in to Community, only hex ids, visit counts and walk totals are uploaded, never your GPS tracks.</span>
+      Nothing leaves your phone unless you share it.
       <span id="walkTip">Keep the screen on while walking: phones pause location in background tabs.</span></p>
     <button class="close" id="btnClose">Done</button>
   </section>
@@ -139,8 +139,6 @@
   <script src="vendor/capacitor.js"></script>
   <script src="vendor/leaflet.js"></script>
   <script src="vendor/h3-js.umd.js"></script>
-  <script src="config.js"></script>
-  <script src="vendor/supabase.js"></script>
   <script src="app.js"></script>
   <script src="social-core.js"></script>
   <script src="social.js"></script>

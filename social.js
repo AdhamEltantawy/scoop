@@ -1,10 +1,12 @@
-/* Scoop community features: accounts, friends, feed, check-ins, leaderboards,
- * challenges, the community map, plus share cards and privacy zones (which
- * work without an account).
+/* Scoop community features, with no server: friends swap "Scoop files" through
+ * the share sheet, and everything else (feed, scores, leaderboards, badges,
+ * verified meetups, challenges, the community map) is worked out on the device
+ * from those files. Also share cards and privacy zones.
  *
- * Everything here is optional. The core app (app.js) works the same without
- * it, and it talks to app.js only through window.scoop and `scoop:*` events.
- * Only H3 cell ids, visit counts and walk totals are uploaded — never tracks.
+ * Talks to app.js only through window.scoop and `scoop:*` events.
+ * A Scoop file holds hex ids (first visits rounded to the day), visit counts,
+ * walk totals, check-ins and challenges — never GPS tracks — and nothing
+ * inside a privacy zone.
  */
 (() => {
   'use strict';
@@ -15,29 +17,16 @@
 
   const { map, toast } = S;
   const $ = (id) => document.getElementById(id);
-  const cfg = window.SCOOP_CONFIG || {};
-  // Invite links point at the web app, which also works for friends without the Android app.
-  const PUBLIC_URL = cfg.publicUrl ||
-    (!S.isNative && location.protocol.startsWith('http') ? location.origin + location.pathname : 'https://adhameltantawy.github.io/scoop/');
-  const sb = cfg.supabaseUrl && cfg.supabaseAnonKey && window.supabase
-    ? window.supabase.createClient(cfg.supabaseUrl, cfg.supabaseAnonKey, {
-      auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: false },
-    })
-    : null;
 
+  const ME_KEY = 'scoop.me.v1';
+  const CHECKINS_KEY = 'scoop.checkins.v1';
+  const CHALLENGES_KEY = 'scoop.challenges.v1';
   const ZONES_KEY = 'scoop.zones.v1';
-  const SYNC_KEY = 'scoop.sync.v1';
-  const INVITE_KEY = 'scoop.invite';
   const TAB_KEY = 'scoop.tab';
-  const PROFILE_COLS = 'id, username, display_name, home_city, leaderboard_public';
-  const PHOTO_BUCKET = 'checkin-photos';
+  const RANKS_KEY = 'scoop.ranks';
   const FRIEND_COLOR = '#4cc9f0';
   const COMMUNITY_COLOR = '#9b5de5';
-
-  // Set once signed in (only possible when sb is configured).
-  let session = null;
-  let profile = null;
-  const uid = () => (session ? session.user.id : null);
+  const parent8 = (c) => h3.cellToParent(c, 8);
 
   // ---------- small helpers ----------
 
@@ -51,16 +40,19 @@
       else if (k in el && typeof v !== 'string') el[k] = v;
       else el.setAttribute(k, v === true ? '' : v);
     }
+    append(el, kids);
+    return el;
+  }
+  function append(el, kids) {
     for (const kid of kids.flat()) {
       if (kid === null || kid === undefined || kid === false) continue;
       el.append(kid instanceof Node ? kid : String(kid));
     }
-    return el;
   }
-
   /** Replace an element's children, skipping null/false (replaceChildren would print them). */
   function fill(el, ...kids) {
-    el.replaceChildren(...kids.flat().filter((k) => k !== null && k !== undefined && k !== false));
+    el.replaceChildren();
+    append(el, kids);
   }
 
   function loadJSON(key, fallback) {
@@ -74,24 +66,49 @@
   function saveJSON(key, value) {
     try {
       localStorage.setItem(key, JSON.stringify(value));
+      return true;
     } catch (e) {
-      // Storage full: the next sync just resends.
+      toast('Could not save — storage full or blocked. Export a backup!');
+      return false;
     }
   }
 
   function fail(err) {
-    toast((err && (err.message || err.error_description)) || String(err), 4500);
+    toast((err && err.message) || String(err), 4500);
   }
 
-  /** Throw Supabase errors so callers can use try/catch. */
-  function check({ data, error }) {
-    if (error) throw error;
-    return data;
-  }
-
+  const cancelled = (err) => /cancel|abort/i.test((err && (err.name + err.message)) || '');
   const distance = (a, b) => h3.greatCircleDistance([a.lat, a.lng], [b.lat, b.lng], h3.UNITS.m);
-  const nameOf = (p) => (p ? p.display_name || p.username : 'Someone');
   const fmtKm = (km) => Number(km).toFixed(km >= 10 ? 1 : 2);
+  const fmtVal = (v, metric) => `${metric === 'km' ? fmtKm(v) : Number(v).toLocaleString()} ${core.METRICS[metric]}`;
+  const newId = () => (crypto.randomUUID ? crypto.randomUUID()
+    : Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) => b.toString(16).padStart(2, '0')).join(''));
+  const localDay = (ms) => new Date(ms).toDateString();
+
+  /** Tiny key-value store on IndexedDB, for friends' files and photos (too big for localStorage). */
+  const idb = (() => {
+    let opening = null;
+    const open = () => opening || (opening = new Promise((resolve, reject) => {
+      const req = indexedDB.open('scoop', 1);
+      req.onupgradeneeded = () => req.result.createObjectStore('kv');
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error);
+    }));
+    const run = async (mode, fn) => {
+      const db = await open();
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction('kv', mode);
+        const req = fn(tx.objectStore('kv'));
+        tx.oncomplete = () => resolve(req.result);
+        tx.onerror = () => reject(tx.error);
+      });
+    };
+    return {
+      get: (key) => run('readonly', (s) => s.get(key)),
+      set: (key, value) => run('readwrite', (s) => s.put(value, key)),
+      del: (key) => run('readwrite', (s) => s.delete(key)),
+    };
+  })();
 
   async function shareFile(blob, name, title) {
     if (S.isNative) {
@@ -117,14 +134,50 @@
     setTimeout(() => URL.revokeObjectURL(a.href), 1000);
   }
 
-  async function shareText(title, text, url) {
-    if (S.isNative) return S.Share.share({ title, text, url });
-    if (navigator.share) return navigator.share({ title, text, url });
-    await navigator.clipboard.writeText(`${text} ${url}`);
-    toast('Invite link copied');
-  }
+  // ---------- local state ----------
 
-  const cancelled = (err) => /cancel|abort/i.test((err && (err.name + err.message)) || '');
+  /** @type {{id:string, name:string}|null} */
+  let me = loadJSON(ME_KEY, null);
+  /** @type {{id:string, cell:string, kind:string, time:number, note:string, photo?:boolean}[]} */
+  let checkins = loadJSON(CHECKINS_KEY, []);
+  /** Challenges you made or were invited to; status is your own: 'joined' or 'invited'. */
+  let challenges = loadJSON(CHALLENGES_KEY, []);
+  /** @type {Map<string, object>} id -> person parsed from their latest Scoop file */
+  const friends = new Map();
+
+  const saveCheckins = () => saveJSON(CHECKINS_KEY, checkins);
+  const saveChallenges = () => saveJSON(CHALLENGES_KEY, challenges);
+
+  function myPerson() {
+    const cells = new Map();
+    for (const [c, t] of S.visited) cells.set(c, { t, v: S.visitCount(c) });
+    return { id: me ? me.id : 'me', name: me ? me.name : 'You', me: true, cells, walks: S.walks, checkins };
+  }
+  const people = () => [myPerson(), ...friends.values()];
+  const nameOf = (id) => (me && id === me.id ? me.name : friends.has(id) ? friends.get(id).name : null);
+
+  // Your check-ins, name and challenges go into backups; friends' files don't
+  // (they can send them again).
+  S.registerBackup('social', {
+    save: () => ({ me, checkins, challenges }),
+    restore: (data) => {
+      if (data.me && !me) { me = data.me; saveJSON(ME_KEY, me); }
+      const known = new Set(checkins.map((c) => c.id));
+      for (const c of data.checkins || []) if (!known.has(c.id)) checkins.push({ ...c, photo: false });
+      saveCheckins();
+      const knownCh = new Set(challenges.map((c) => c.id));
+      for (const c of data.challenges || []) if (!knownCh.has(c.id)) challenges.push(c);
+      saveChallenges();
+      loadCheckinMarkers();
+    },
+  });
+
+  document.addEventListener('scoop:cleared', () => {
+    for (const c of checkins) if (c.photo) idb.del(`photo:${c.id}`).catch(() => {});
+    checkins = [];
+    saveCheckins();
+    loadCheckinMarkers();
+  });
 
   // ---------- privacy zones (local only) ----------
 
@@ -152,18 +205,14 @@
   }
 
   function renderZoneList() {
-    const list = $('zoneList');
-    list.replaceChildren(...zones.map((z, i) => h('li', {},
+    fill($('zoneList'), zones.map((z, i) => h('li', {},
       h('span', {}, `Zone ${i + 1}`),
       h('select', {
         'aria-label': `Zone ${i + 1} radius`,
-        onchange: (e) => { z.r = Number(e.target.value); zonesChanged(); afterZonesChanged(); },
+        onchange: (e) => { z.r = Number(e.target.value); zonesChanged(); },
       }, [200, 300, 500, 800].map((r) => h('option', { value: String(r), selected: r === z.r }, `${r} m`))),
-      h('button', { class: 'link', onclick: () => map.setView([z.lat, z.lng], 16) }, 'Show'),
-      h('button', {
-        class: 'link danger',
-        onclick: () => { zones.splice(i, 1); zonesChanged(); afterZonesChanged(); },
-      }, 'Remove'),
+      h('button', { class: 'link', onclick: () => { S.closeSheet(); map.setView([z.lat, z.lng], 16); } }, 'Show'),
+      h('button', { class: 'link danger', onclick: () => { zones.splice(i, 1); zonesChanged(); } }, 'Remove'),
     )));
     $('btnAddZone').disabled = zones.length >= 3;
   }
@@ -172,7 +221,6 @@
     const c = map.getCenter();
     zones.push({ lat: c.lat, lng: c.lng, r: 300 });
     zonesChanged();
-    afterZonesChanged();
     toast('Privacy zone added at the map centre');
   });
 
@@ -209,10 +257,9 @@
     const edge = h3.getHexagonEdgeLengthAvg(res, h3.UNITS.m);
     const hiddenDisplay = core.zoneFilter(zones.map((z) => ({ ...z, r: z.r + edge * 2 })), h3.cellToLatLng, distance);
     const bounds = map.getBounds();
-    const inView = (c) => bounds.contains(h3.cellToLatLng(c));
     const display = new Set();
     for (const c of S.visited.keys()) if (!isHidden(c)) display.add(S.toDisplay(c));
-    const shown = [...display].filter((c) => inView(c) && !hiddenDisplay(c));
+    const shown = [...display].filter((c) => bounds.contains(h3.cellToLatLng(c)) && !hiddenDisplay(c));
 
     const size = map.getSize();
     const scale = Math.min(frame.w / size.x, frame.h / size.y);
@@ -273,12 +320,12 @@
       [S.walks.length.toLocaleString(), 'walks'],
     ];
     const colW = (W - 80) / stats.length;
-    stats.forEach(([num, lbl], i) => {
+    stats.forEach(([n, lbl], i) => {
       const x = 40 + colW * i + colW / 2;
       ctx.textAlign = 'center';
       ctx.fillStyle = '#ffd166';
       ctx.font = '700 56px system-ui, sans-serif';
-      ctx.fillText(num, x, 1150);
+      ctx.fillText(n, x, 1150);
       ctx.fillStyle = '#a3acc0';
       ctx.font = '400 28px system-ui, sans-serif';
       ctx.fillText(lbl.toUpperCase(), x, 1195);
@@ -300,147 +347,102 @@
     shareCard();
   });
 
-  // ---------- everything below needs a Supabase project ----------
+  // ---------- Scoop files: share yours, add friends' ----------
 
-  if (!sb) {
-    $('communityNote').textContent = 'Community features are off in this build (no Supabase project configured).';
-    return;
-  }
-  document.body.classList.add('community-on');
-
-  // ---------- sync ----------
-
-  let syncState = loadJSON(SYNC_KEY, { uid: null, cells: {}, walks: [] });
-  let syncing = false;
-  let syncAgain = false;
-  let syncTimer = null;
-  let syncStatus = 'Not synced yet';
-
-  function saveSync() {
-    saveJSON(SYNC_KEY, syncState);
-  }
-
-  function scheduleSync(ms = 3000) {
-    clearTimeout(syncTimer);
-    syncTimer = setTimeout(sync, ms);
-  }
-
-  async function sync() {
-    if (!profile) return;
-    if (syncing) {
-      syncAgain = true;
-      return;
-    }
-    syncing = true;
+  async function shareMyFile() {
+    if (!me) return toast('Set your name in Community first');
+    const file = core.makeFriendFile({
+      me,
+      cells: [...S.visited].filter(([c]) => !isHidden(c)).map(([c, t]) => [c, t, S.visitCount(c)]),
+      walks: S.walks,
+      checkins: checkins.filter((c) => !isHidden(c.cell)),
+      challenges: challenges.filter((c) => c.status === 'joined').map((c) => ({
+        ...c, names: Object.fromEntries(c.members.map((m) => [m, nameOf(m) || c.names[m]]).filter(([, n]) => n)),
+      })),
+    });
+    const slug = me.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'me';
+    const blob = new Blob([JSON.stringify(file)], { type: 'application/json' });
     try {
-      if (syncState.uid !== uid()) syncState = { uid: uid(), cells: {}, walks: [] };
-      const delta = core.syncDelta(S.visited, S.visitCount, syncState.cells, isHidden);
-      for (const batch of core.chunk(delta, 1000)) {
-        check(await sb.rpc('sync_cells', { cells: batch }));
-        for (const x of batch) syncState.cells[x.c] = x.v;
-        saveSync();
-      }
-      const known = new Set(syncState.walks);
-      const fresh = S.walks.filter((w) => !known.has(w.start) && w.end >= w.start);
-      for (const batch of core.chunk(fresh, 200)) {
-        check(await sb.from('walks').upsert(batch.map((w) => ({
-          started_at: new Date(w.start).toISOString(),
-          ended_at: new Date(w.end).toISOString(),
-          km: Math.min(299, Math.max(0, +(w.km || 0).toFixed(3))),
-          new_cells: w.newCells || 0,
-        })), { onConflict: 'user_id,started_at', ignoreDuplicates: true }));
-        syncState.walks.push(...batch.map((w) => w.start));
-        saveSync();
-      }
-      syncStatus = `Synced ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+      await shareFile(blob, `scoop-${slug}-${new Date().toISOString().slice(0, 10)}.json`, `${me.name}'s Scoop`);
     } catch (err) {
-      syncStatus = navigator.onLine ? `Sync failed: ${err.message}` : 'Offline — will sync when back online';
-    } finally {
-      syncing = false;
-      const el = $('syncStatus');
-      if (el) el.textContent = syncStatus;
-    }
-    if (syncAgain) {
-      syncAgain = false;
-      await sync();
+      if (!cancelled(err)) fail(err);
     }
   }
 
-  /** Remove anything now inside a privacy zone from the server, or upload what left one. */
-  async function afterZonesChanged() {
-    if (!profile) return;
-    try {
-      const hidden = Object.keys(syncState.cells).filter(isHidden);
-      for (const batch of core.chunk(hidden, 200)) {
-        check(await sb.from('user_cells').delete().eq('user_id', uid()).in('cell', batch));
-        check(await sb.from('checkins').delete().eq('user_id', uid()).in('cell', batch));
-        for (const c of batch) delete syncState.cells[c];
-        saveSync();
-      }
-      await sync();
-      loadCheckinMarkers();
-    } catch (err) {
-      fail(err);
-    }
-  }
-
-  document.addEventListener('scoop:changed', () => scheduleSync());
-  window.addEventListener('online', () => scheduleSync(1000));
-
-  // ---------- auth ----------
-
-  async function setSession(next) {
-    const changed = uid() !== (next ? next.user.id : null);
-    session = next;
-    if (!changed && profile) return;
-    profile = null;
-    clearFriendOverlay();
-    document.body.classList.toggle('signed-in', false);
-    if (session) {
+  const friendFileInput = h('input', { type: 'file', accept: '.json,application/json', multiple: true, hidden: true });
+  document.body.append(friendFileInput);
+  friendFileInput.addEventListener('change', async (e) => {
+    const files = [...e.target.files];
+    e.target.value = '';
+    for (const file of files) {
       try {
-        profile = check(await sb.from('profiles').select(PROFILE_COLS).eq('id', uid()).maybeSingle());
+        const raw = JSON.parse(await file.text());
+        const p = core.parseFriendFile(raw);
+        if (me && p.id === me.id) throw new Error('that\'s your own Scoop file');
+        const prev = friends.get(p.id);
+        if (prev && prev.exported > p.exported) throw new Error(`you already have a newer file from ${p.name}`);
+        await idb.set(`friend:${p.id}`, raw);
+        await idb.set('friendIds', [...new Set([...friends.keys(), p.id])]);
+        friends.set(p.id, p);
+        const invites = mergeChallenges(p);
+        toast(`${prev ? 'Updated' : 'Added'} ${p.name} · ${p.cells.size.toLocaleString()} hexes` +
+          (invites ? ` · ${invites} challenge invite${invites === 1 ? '' : 's'}` : ''), 4000);
       } catch (err) {
-        fail(err);
+        toast(`Skipped ${file.name}: ${err.message}`, 4500);
       }
     }
-    if (profile) onProfileReady();
-    renderCommunity();
-  }
+    friendsChanged();
+  });
 
-  function onProfileReady() {
-    document.body.classList.add('signed-in');
-    scheduleSync(500);
-    acceptPendingInvite();
-    loadCheckinMarkers();
-  }
-
-  // Fires once at startup with the saved session (or null), then on every change.
-  // Supabase warns against awaiting its own calls inside this callback.
-  sb.auth.onAuthStateChange((_event, next) => setTimeout(() => setSession(next), 0));
-
-  // Invite links: …/scoop/?invite=CODE
-  const inviteFromUrl = core.parseInvite(new URLSearchParams(location.search).get('invite'));
-  if (inviteFromUrl) {
-    saveJSON(INVITE_KEY, inviteFromUrl);
-    history.replaceState(null, '', location.pathname);
-  }
-
-  async function acceptPendingInvite() {
-    const code = loadJSON(INVITE_KEY, null);
-    if (!code) return;
-    localStorage.removeItem(INVITE_KEY);
-    try {
-      const [p] = check(await sb.rpc('send_friend_request', { code }));
-      if (p) toast(p.status === 'accepted' ? `You're now friends with ${nameOf(p)}` : `Friend request sent to ${nameOf(p)}`, 4000);
-    } catch (err) {
-      if (!/own code/.test(err.message)) fail(err);
+  /** Pick up challenges from a friend's file that include you. Returns new invites. */
+  function mergeChallenges(p) {
+    if (!me) return 0;
+    let added = 0;
+    for (const c of p.challenges) {
+      if (c.creator === me.id || !c.members.includes(me.id)) continue;
+      const mine = challenges.find((x) => x.id === c.id);
+      if (mine) Object.assign(mine, { ...c, status: mine.status, names: { ...mine.names, ...c.names } });
+      else {
+        challenges.push({ ...c, status: 'invited' });
+        added++;
+      }
     }
+    saveChallenges();
+    return added;
+  }
+
+  async function loadFriends() {
+    try {
+      const ids = (await idb.get('friendIds')) || [];
+      for (const id of ids) {
+        const raw = await idb.get(`friend:${id}`);
+        if (raw) friends.set(id, core.parseFriendFile(raw));
+      }
+    } catch (err) {
+      // No IndexedDB (some private windows): friends just can't be kept.
+    }
+    friendsChanged();
+  }
+
+  async function removeFriend(id) {
+    friends.delete(id);
+    await idb.del(`friend:${id}`);
+    await idb.set('friendIds', [...friends.keys()]);
+    if (overlay && overlay.id === id) clearFriendOverlay();
+    friendsChanged();
+  }
+
+  function friendsChanged() {
+    communityCache = null;
+    if (overlay && friends.has(overlay.id)) overlay = friends.get(overlay.id);
+    S.render();
+    loadCheckinMarkers();
+    if (!$('communitySheet').hidden) renderCommunity();
   }
 
   // ---------- community sheet ----------
 
   let tab = loadJSON(TAB_KEY, 'feed');
-  let signInEmail = '';
 
   $('btnCommunity').addEventListener('click', () => {
     renderCommunity();
@@ -448,347 +450,150 @@
   });
   $('btnCommunityClose').addEventListener('click', S.closeSheet);
 
-  function setBody(...kids) {
-    fill($('communityBody'), ...kids);
-  }
-
   function renderCommunity() {
-    if (!session) return renderSignIn();
-    if (!profile) return renderProfileSetup();
+    if (!me) return renderNameSetup();
     const tabs = [['feed', 'Feed'], ['friends', 'Friends'], ['ranks', 'Ranks'], ['challenges', 'Challenges'], ['me', 'Me']];
-    $('communityTabs').replaceChildren(...tabs.map(([key, label]) => h('button', {
+    fill($('communityTabs'), tabs.map(([key, label]) => h('button', {
       class: 'tab', role: 'tab', 'aria-selected': String(key === tab),
       onclick: () => { tab = key; saveJSON(TAB_KEY, tab); renderCommunity(); },
     }, label)));
     $('communityTabs').hidden = false;
-    const panel = h('div', {}, h('p', { class: 'fine' }, 'Loading…'));
-    setBody(panel);
+    const panel = h('div', {});
+    fill($('communityBody'), panel);
     const render = { feed: renderFeed, friends: renderFriends, ranks: renderRanks, challenges: renderChallenges, me: renderMe }[tab] || renderFeed;
-    render(panel).catch((err) => {
-      fill(panel, h('p', { class: 'fine' }, navigator.onLine ? `Couldn't load: ${err.message}` : 'You\'re offline.'));
-    });
+    try {
+      render(panel);
+    } catch (err) {
+      fill(panel, h('p', { class: 'fine' }, `Something went wrong: ${err.message}`));
+    }
   }
 
-  function renderSignIn() {
+  function renderNameSetup() {
     $('communityTabs').hidden = true;
-    const email = h('input', { type: 'email', placeholder: 'you@example.com', autocomplete: 'email', value: signInEmail, required: true });
-    const code = h('input', { type: 'text', inputmode: 'numeric', autocomplete: 'one-time-code', placeholder: '6-digit code', maxlength: '10' });
-    const codeRow = h('label', { class: 'field', hidden: true }, h('span', {}, 'Code from the email'), code);
-    const button = h('button', { class: 'primary', type: 'submit' }, 'Email me a code');
-    let sent = false;
-    const form = h('form', {
-      onsubmit: async (e) => {
+    const name = h('input', { placeholder: 'Your name', maxlength: '40', required: true, autocomplete: 'nickname' });
+    fill($('communityBody'), h('form', {
+      onsubmit: (e) => {
         e.preventDefault();
-        button.disabled = true;
-        try {
-          if (!sent) {
-            signInEmail = email.value.trim();
-            check(await sb.auth.signInWithOtp({ email: signInEmail, options: { shouldCreateUser: true } }));
-            sent = true;
-            codeRow.hidden = false;
-            button.textContent = 'Sign in';
-            code.focus();
-            toast('Check your email for the code');
-          } else {
-            check(await sb.auth.verifyOtp({ email: signInEmail, token: code.value.trim(), type: 'email' }));
-          }
-        } catch (err) {
-          fail(err);
-        } finally {
-          button.disabled = false;
-        }
+        if (!name.value.trim()) return;
+        me = { id: newId(), name: name.value.trim() };
+        saveJSON(ME_KEY, me);
+        tab = 'friends';
+        renderCommunity();
       },
     },
-    h('p', {}, 'Sign in to add friends, compare maps, check in at places and climb the leaderboards.'),
-    h('label', { class: 'field' }, h('span', {}, 'Email'), email),
-    codeRow,
-    button,
-    h('p', { class: 'fine' }, 'Only hex ids, visit counts and walk totals are uploaded — never your GPS tracks. ' +
-      'Friends see your map; nobody else does unless you make your profile public. Hexes inside your privacy zones are never uploaded.'));
-    setBody(form);
+    h('p', {}, 'Walk with friends: compare maps, check in at places, earn badges and race in challenges.'),
+    h('p', { class: 'fine' }, 'There are no accounts and no servers. You and your friends swap Scoop files through ' +
+      'WhatsApp, email or any app in the share sheet. A Scoop file holds your hexes, walk totals and check-ins — ' +
+      'never your GPS tracks, and nothing inside your privacy zones.'),
+    h('label', { class: 'field' }, h('span', {}, 'What should friends call you?'), name),
+    h('button', { class: 'primary', type: 'submit' }, 'Continue')));
   }
 
-  function profileFields(p) {
-    return {
-      username: h('input', { value: p.username || '', placeholder: 'walker_42', autocapitalize: 'none', maxlength: '20', required: true }),
-      display_name: h('input', { value: p.display_name || '', placeholder: 'Your name', maxlength: '40' }),
-      home_city: h('input', { value: p.home_city || '', placeholder: 'City', maxlength: '60' }),
-      leaderboard_public: h('input', { type: 'checkbox', checked: !!p.leaderboard_public }),
-    };
-  }
-
-  function readProfile(f) {
-    const username = f.username.value.trim().toLowerCase();
-    if (!core.validUsername(username)) throw new Error('Usernames are 3–20 characters: a–z, 0–9 and _');
-    return {
-      username,
-      display_name: f.display_name.value.trim() || null,
-      home_city: f.home_city.value.trim() || null,
-      leaderboard_public: f.leaderboard_public.checked,
-    };
-  }
-
-  function profileError(err) {
-    return err.code === '23505' ? new Error('That username is taken') : err;
-  }
-
-  function profileForm(f) {
-    return [
-      h('label', { class: 'field' }, h('span', {}, 'Username'), f.username),
-      h('label', { class: 'field' }, h('span', {}, 'Display name'), f.display_name),
-      h('label', { class: 'field' }, h('span', {}, 'Home city'), f.home_city),
-      h('label', { class: 'row' },
-        h('span', {}, 'Public profile', h('small', {}, 'Show me on public leaderboards and the community map')),
-        f.leaderboard_public),
-    ];
-  }
-
-  function renderProfileSetup() {
-    $('communityTabs').hidden = true;
-    const f = profileFields({});
-    setBody(h('form', {
-      onsubmit: async (e) => {
-        e.preventDefault();
-        try {
-          profile = check(await sb.from('profiles').insert({ id: uid(), ...readProfile(f) }).select(PROFILE_COLS).single());
-          onProfileReady();
-          renderCommunity();
-        } catch (err) {
-          fail(profileError(err));
-        }
-      },
-    },
-    h('p', {}, 'Pick a username your friends will see.'),
-    profileForm(f),
-    h('button', { class: 'primary', type: 'submit' }, 'Continue'),
-    h('button', { class: 'link', type: 'button', onclick: () => sb.auth.signOut() }, 'Use a different email')));
+  function sharePrompt(text) {
+    return h('div', { class: 'invite' },
+      h('div', {}, h('small', {}, text)),
+      h('button', { class: 'primary', onclick: shareMyFile }, 'Share my Scoop file'));
   }
 
   // ---------- feed ----------
 
-  async function photoUrls(paths) {
-    if (!paths.length) return {};
-    const rows = check(await sb.storage.from(PHOTO_BUCKET).createSignedUrls(paths, 3600));
-    return Object.fromEntries(rows.filter((r) => r.signedUrl).map((r) => [r.path, r.signedUrl]));
+  async function photoUrl(id) {
+    const blob = await idb.get(`photo:${id}`);
+    return blob ? URL.createObjectURL(blob) : null;
   }
 
-  async function loadFeedPage(before) {
-    const lim = 20;
-    const [walks, checkins, badges] = await Promise.all([
-      sb.from('walks').select('id, user_id, started_at, km, new_cells, profiles(username, display_name), kudos(user_id, emoji)')
-        .lt('started_at', before).order('started_at', { ascending: false }).limit(lim),
-      sb.from('checkins')
-        .select('id, user_id, cell, kind, note, photo_path, met_with, created_at, author:profiles!checkins_user_id_fkey(username, display_name), met:profiles!checkins_met_with_fkey(username, display_name)')
-        .lt('created_at', before).order('created_at', { ascending: false }).limit(lim),
-      sb.from('badges').select('user_id, badge_key, earned_at, profiles(username, display_name)')
-        .lt('earned_at', before).order('earned_at', { ascending: false }).limit(lim),
-    ].map((q) => q.then(check)));
-    const items = [
-      ...walks.map((w) => ({ type: 'walk', at: w.started_at, ...w })),
-      ...checkins.map((c) => ({ type: 'checkin', at: c.created_at, ...c })),
-      ...badges.map((b) => ({ type: 'badge', at: b.earned_at, ...b })),
-    ].sort((a, b) => (a.at < b.at ? 1 : -1)).slice(0, lim);
-    const urls = await photoUrls(items.filter((i) => i.photo_path).map((i) => i.photo_path));
-    return { items, urls, more: walks.length === lim || checkins.length === lim || badges.length === lim };
-  }
-
-  function kudosBar(w) {
-    const bar = h('div', { class: 'kudos' });
-    const draw = () => {
-      const mine = w.kudos.find((k) => k.user_id === uid());
-      bar.replaceChildren(...core.KUDOS.map((emoji) => {
-        const n = w.kudos.filter((k) => k.emoji === emoji).length;
-        return h('button', {
-          class: 'chip', 'aria-pressed': String(!!mine && mine.emoji === emoji), disabled: w.user_id === uid(),
-          title: w.user_id === uid() ? 'Kudos from friends show here' : 'Give kudos',
-          onclick: async () => {
-            try {
-              if (mine) check(await sb.from('kudos').delete().eq('walk_id', w.id).eq('user_id', uid()));
-              w.kudos = w.kudos.filter((k) => k.user_id !== uid());
-              if (!mine || mine.emoji !== emoji) {
-                check(await sb.from('kudos').insert({ walk_id: w.id, emoji }));
-                w.kudos.push({ user_id: uid(), emoji });
-              }
-              draw();
-            } catch (err) {
-              fail(err);
-            }
-          },
-        }, emoji, n ? ` ${n}` : '');
-      }));
-    };
-    draw();
-    return bar;
-  }
-
-  function feedItem(item, urls) {
-    const when = h('time', {}, core.timeAgo(Date.parse(item.at)));
-    if (item.type === 'walk') {
-      return h('li', { class: 'feed-item' },
-        h('div', {}, h('b', {}, nameOf(item.profiles)), ` walked ${fmtKm(item.km)} km`,
-          item.new_cells ? ` · ${item.new_cells} new hex${item.new_cells === 1 ? '' : 'es'}` : '', ' ', when),
-        kudosBar(item));
+  function renderFeed(panel) {
+    const everyone = people();
+    const verified = core.meetupVerifier(everyone);
+    const since = Date.now() - 60 * core.DAY;
+    const items = [];
+    for (const p of everyone) {
+      for (const w of p.walks) if (w.start >= since) items.push({ type: 'walk', at: w.start, p, w });
+      for (const c of p.checkins) if (c.time >= since) items.push({ type: 'checkin', at: c.time, p, c });
     }
-    if (item.type === 'badge') {
-      const b = core.BADGES[item.badge_key] || { icon: '🏅', label: item.badge_key };
-      return h('li', { class: 'feed-item' },
-        h('div', {}, h('b', {}, nameOf(item.profiles)), ` earned ${b.icon} ${b.label} `, when));
-    }
-    const kind = core.CHECKIN_KINDS[item.kind];
-    const what = item.kind === 'meetup'
-      ? (item.met_with ? ` met up with ${item.met ? nameOf(item.met) : 'a friend'}` : ' is up for a meetup')
-      : ` checked in · ${kind.label.toLowerCase()}`;
-    return h('li', { class: 'feed-item' },
-      h('div', {}, `${kind.icon} `, h('b', {}, nameOf(item.author)), what, ' ', when),
-      item.note ? h('div', { class: 'note' }, item.note) : null,
-      urls[item.photo_path] ? h('img', { class: 'photo', src: urls[item.photo_path], alt: item.note || 'Check-in photo', loading: 'lazy' }) : null,
-      h('button', {
-        class: 'link',
-        onclick: () => { S.closeSheet(); map.setView(h3.cellToLatLng(item.cell), 17); },
-      }, 'Show on map'));
-  }
-
-  async function renderFeed(panel) {
+    items.sort((a, b) => b.at - a.at);
     const list = h('ul', { class: 'list' });
-    const more = h('button', { class: 'link', hidden: true }, 'Load more');
-    let before = new Date(Date.now() + 60000).toISOString();
-    const load = async () => {
-      more.disabled = true;
-      const page = await loadFeedPage(before);
-      for (const item of page.items) list.append(feedItem(item, page.urls));
-      if (page.items.length) before = page.items[page.items.length - 1].at;
-      more.hidden = !page.more;
-      more.disabled = false;
-      if (!list.children.length) {
-        list.append(h('li', { class: 'fine' }, 'Nothing here yet. Add friends in the Friends tab, then go for a walk!'));
-      }
+    const more = h('button', { class: 'link', hidden: true }, 'Show more');
+    let shown = 0;
+    const page = () => {
+      for (const item of items.slice(shown, shown + 30)) list.append(feedItem(item, verified));
+      shown += 30;
+      more.hidden = shown >= items.length;
     };
-    more.addEventListener('click', () => load().catch(fail));
-    await load();
-    fill(panel, list, more);
+    more.addEventListener('click', page);
+    page();
+    fill(panel,
+      friends.size ? null : sharePrompt('Add friends by swapping Scoop files — then their walks and check-ins show up here.'),
+      items.length ? list : h('p', { class: 'fine' }, 'Nothing in the last 60 days yet. Go for a walk!'),
+      more,
+      friends.size ? h('p', { class: 'fine' }, 'Friends\' activity is as of the last Scoop file they sent you.') : null);
+  }
+
+  function feedItem({ type, at, p, w, c }, verified) {
+    const who = h('b', {}, p.me ? 'You' : p.name);
+    const when = h('time', {}, core.timeAgo(at));
+    if (type === 'walk') {
+      return h('li', { class: 'feed-item' }, who, ` walked ${fmtKm(w.km)} km`,
+        w.newCells ? ` · ${w.newCells} new hex${w.newCells === 1 ? '' : 'es'}` : '', ' ', when);
+    }
+    const kind = core.CHECKIN_KINDS[c.kind];
+    const what = c.kind === 'meetup'
+      ? (verified(p, c) ? ' met up with a friend' : ' checked in for a meetup (not matched yet)')
+      : ` checked in · ${kind.label.toLowerCase()}`;
+    const img = p.me && c.photo ? h('img', { class: 'photo', alt: c.note || 'Check-in photo', hidden: true }) : null;
+    if (img) photoUrl(c.id).then((url) => { if (url) { img.src = url; img.hidden = false; } }).catch(() => {});
+    return h('li', { class: 'feed-item' },
+      h('div', {}, `${kind.icon} `, who, what, ' ', when),
+      c.note ? h('div', { class: 'note' }, c.note) : null,
+      img,
+      h('button', { class: 'link', onclick: () => { S.closeSheet(); map.setView(h3.cellToLatLng(c.cell), 17); } }, 'Show on map'));
   }
 
   // ---------- friends, map overlay and compare ----------
 
-  async function loadFriends() {
-    const rows = check(await sb.from('friendships').select('requester, addressee, status, created_at'));
-    const ids = rows.map((r) => (r.requester === uid() ? r.addressee : r.requester));
-    const profiles = ids.length
-      ? check(await sb.from('profiles').select(PROFILE_COLS).in('id', ids))
-      : [];
-    const byId = Object.fromEntries(profiles.map((p) => [p.id, p]));
-    return rows.map((r) => {
-      const otherId = r.requester === uid() ? r.addressee : r.requester;
-      return { ...r, other: byId[otherId] || { id: otherId, username: '?' }, incoming: r.addressee === uid() };
-    });
-  }
-
-  async function renderFriends(panel) {
-    const [rows, code] = await Promise.all([loadFriends(), sb.rpc('my_invite_code').then(check)]);
-    const friends = rows.filter((r) => r.status === 'accepted');
-    const incoming = rows.filter((r) => r.status === 'pending' && r.incoming);
-    const outgoing = rows.filter((r) => r.status === 'pending' && !r.incoming);
-    const codeInput = h('input', { placeholder: 'Friend\'s invite code or link', autocapitalize: 'characters' });
-
-    const friendRow = (r) => {
-      const p = r.other;
-      const showing = overlay && overlay.friend.id === p.id;
-      return h('li', { class: 'person' },
-        h('span', {}, h('b', {}, nameOf(p)), p.home_city ? h('small', {}, ` ${p.home_city}`) : ''),
-        h('button', {
-          class: 'chip', 'aria-pressed': String(showing),
-          onclick: () => (showing ? clearFriendOverlay() : showFriendOverlay(p)).then(() => renderCommunity()).catch(fail),
-        }, showing ? 'Hide map' : 'Compare'),
-        h('button', {
-          class: 'link danger',
-          onclick: async () => {
-            if (!confirm(`Remove ${nameOf(p)} from your friends?`)) return;
-            try {
-              check(await sb.from('friendships').delete().eq('requester', r.requester).eq('addressee', r.addressee));
-              if (showing) clearFriendOverlay();
-              renderCommunity();
-            } catch (err) {
-              fail(err);
-            }
-          },
-        }, 'Remove'));
-    };
-
-    const respond = (r, accept) => async () => {
-      try {
-        check(await sb.rpc('respond_friend_request', { other: r.other.id, accept }));
-        renderCommunity();
-      } catch (err) {
-        fail(err);
-      }
-    };
-
-    fill(panel, 
-      h('div', { class: 'invite' },
-        h('div', {}, h('small', {}, 'Your invite code'), h('div', { class: 'code' }, code)),
-        h('button', {
-          class: 'primary',
-          onclick: () => shareText('Scoop', 'Explore the city with me on Scoop!', `${PUBLIC_URL}?invite=${code}`)
-            .catch((err) => { if (!cancelled(err)) fail(err); }),
-        }, 'Share invite')),
-      h('form', {
-        class: 'inline',
-        onsubmit: async (e) => {
-          e.preventDefault();
-          const c = core.parseInvite(codeInput.value);
-          if (!c) return toast('That doesn\'t look like an invite code');
-          try {
-            const [p] = check(await sb.rpc('send_friend_request', { code: c }));
-            toast(p.status === 'accepted' ? `You're now friends with ${nameOf(p)}` : `Request sent to ${nameOf(p)}`);
-            renderCommunity();
-          } catch (err) {
-            fail(err);
-          }
-        },
-      }, codeInput, h('button', { type: 'submit' }, 'Add')),
-      incoming.length ? h('h3', {}, 'Requests') : null,
-      incoming.length ? h('ul', { class: 'list' }, incoming.map((r) => h('li', { class: 'person' },
-        h('b', {}, nameOf(r.other)),
-        h('button', { class: 'chip', onclick: respond(r, true) }, 'Accept'),
-        h('button', { class: 'link', onclick: respond(r, false) }, 'Decline')))) : null,
-      h('h3', {}, `Friends (${friends.length})`),
-      friends.length
-        ? h('ul', { class: 'list' }, friends.map(friendRow))
-        : h('p', { class: 'fine' }, 'No friends yet — share your invite code.'),
-      outgoing.length ? h('p', { class: 'fine' }, `Waiting on: ${outgoing.map((r) => nameOf(r.other)).join(', ')}`) : null,
+  function renderFriends(panel) {
+    const list = [...friends.values()].sort((a, b) => a.name.localeCompare(b.name));
+    fill(panel,
+      sharePrompt('Send your Scoop file to friends. Send a new one whenever you want them to see your latest walks.'),
+      h('button', { class: 'wide-btn', onclick: () => friendFileInput.click() }, 'Add a friend\'s Scoop file…'),
+      h('p', { class: 'fine' }, 'Got a file in WhatsApp or email? Save it to your phone, then add it here. ' +
+        'Adding a newer file from the same friend updates them.'),
+      h('h3', {}, `Friends (${list.length})`),
+      list.length
+        ? h('ul', { class: 'list' }, list.map((p) => {
+          const showing = overlay && overlay.id === p.id;
+          return h('li', { class: 'person' },
+            h('span', {}, h('b', {}, p.name),
+              h('small', {}, ` ${p.cells.size.toLocaleString()} hexes · file from ${core.timeAgo(p.exported)}`)),
+            h('button', {
+              class: 'chip', 'aria-pressed': String(showing),
+              onclick: () => { if (showing) clearFriendOverlay(); else showFriendOverlay(p); renderCommunity(); },
+            }, showing ? 'Hide' : 'Compare'),
+            h('button', {
+              class: 'link danger',
+              onclick: () => { if (confirm(`Remove ${p.name} and their data from this phone?`)) removeFriend(p.id).catch(fail); },
+            }, 'Remove'));
+        }))
+        : h('p', { class: 'fine' }, 'No friends yet.'),
       h('h3', {}, 'Map layers'),
       h('label', { class: 'row' },
-        h('span', {}, 'Community map', h('small', {}, 'Blocks explored by you, friends and public profiles. Tap a block to see who got there first.')),
-        h('input', {
-          type: 'checkbox', checked: communityOn,
-          onchange: (e) => { communityOn = e.target.checked; drawCommunity(); },
-        })),
+        h('span', {}, 'Community map', h('small', {}, 'Blocks explored by you and your friends. Tap a block to see who got there first.')),
+        h('input', { type: 'checkbox', checked: communityOn, onchange: (e) => { communityOn = e.target.checked; S.render(); } })),
     );
   }
 
   map.createPane('friends').style.zIndex = '425';
   const friendLayer = L.layerGroup([], { pane: 'friends' }).addTo(map);
-  /** @type {{friend:object, cells:Set<string>}|null} */
+  /** The friend whose map is drawn over yours, or null. */
   let overlay = null;
 
-  async function fetchAllCells(userId) {
-    const cells = new Set();
-    for (let from = 0; ; from += 1000) {
-      const rows = check(await sb.from('user_cells').select('cell').eq('user_id', userId)
-        .order('cell').range(from, from + 999));
-      for (const r of rows) cells.add(r.cell);
-      if (rows.length < 1000) return cells;
-    }
-  }
-
-  async function showFriendOverlay(friend) {
-    toast(`Loading ${nameOf(friend)}'s map…`);
-    overlay = { friend, cells: await fetchAllCells(friend.id) };
+  function showFriendOverlay(p) {
+    overlay = p;
     S.closeSheet();
     S.render();
   }
 
-  async function clearFriendOverlay() {
+  function clearFriendOverlay() {
     overlay = null;
     friendLayer.clearLayers();
     $('compareBar').hidden = true;
@@ -799,7 +604,7 @@
   function drawFriendOverlay(myDisplay) {
     friendLayer.clearLayers();
     if (!overlay) return;
-    const theirs = new Set([...overlay.cells].map(S.toDisplay));
+    const theirs = new Set([...overlay.cells.keys()].map(S.toDisplay));
     const bounds = map.getBounds().pad(0.5);
     const draw = [...theirs].filter((c) => bounds.contains(h3.cellToLatLng(c)));
     if (draw.length) {
@@ -808,76 +613,64 @@
         fillColor: FRIEND_COLOR, fillOpacity: 0.16, interactive: false,
       }).addTo(friendLayer);
     }
-    const mine = new Set([...myDisplay].filter((c) => !isHidden(c)));
-    const cmp = core.compare(mine, theirs);
-    $('compareText').replaceChildren(
-      h('b', {}, nameOf(overlay.friend)), ` · ${cmp.both.toLocaleString()} shared · `,
+    const cmp = core.compare(myDisplay, theirs);
+    fill($('compareText'),
+      h('b', {}, overlay.name), ` · ${cmp.both.toLocaleString()} shared · `,
       h('span', { class: 'you' }, `${cmp.onlyMine.toLocaleString()} only you`), ' · ',
       h('span', { class: 'them' }, `${cmp.onlyTheirs.toLocaleString()} only them`));
     $('compareBar').hidden = false;
     document.body.classList.add('comparing');
   }
 
-  // ---------- community map ----------
+  // ---------- community map (you + friends) ----------
 
   map.createPane('community').style.zIndex = '402';
   const communityLayer = L.layerGroup([], { pane: 'community' }).addTo(map);
   let communityOn = false;
-  let communityKey = '';
-  /** @type {Map<string, {explorers:number, first_username:string, first_visited:string}>} */
-  let communityCells = new Map();
-  let communityTimer = null;
+  /** @type {Map<string, {explorers:number, first:string, firstAt:number}>|null} block -> stats */
+  let communityCache = null;
+
+  function communityCells() {
+    if (communityCache) return communityCache;
+    const blocks = new Map();
+    for (const p of people()) {
+      const firstIn = new Map();
+      for (const [c, { t }] of p.cells) {
+        const b = h3.cellToParent(c, 9);
+        if (!firstIn.has(b) || t < firstIn.get(b)) firstIn.set(b, t);
+      }
+      for (const [b, t] of firstIn) {
+        const s = blocks.get(b) || { explorers: 0, first: '', firstAt: Infinity };
+        s.explorers++;
+        if (t < s.firstAt) { s.firstAt = t; s.first = p.me ? 'You' : p.name; }
+        blocks.set(b, s);
+      }
+    }
+    communityCache = blocks;
+    return blocks;
+  }
+  document.addEventListener('scoop:changed', () => { communityCache = null; });
 
   function drawCommunity() {
-    clearTimeout(communityTimer);
-    if (!communityOn) {
-      communityLayer.clearLayers();
-      communityKey = '';
-      return;
+    communityLayer.clearLayers();
+    if (!communityOn || map.getZoom() < 12) return;
+    const bounds = map.getBounds().pad(0.3);
+    for (const [cell, s] of communityCells()) {
+      if (!bounds.contains(h3.cellToLatLng(cell))) continue;
+      L.polygon(h3.cellToBoundary(cell), {
+        pane: 'community', stroke: false, interactive: false,
+        fillColor: COMMUNITY_COLOR, fillOpacity: Math.min(0.15 + 0.12 * s.explorers, 0.65),
+      }).addTo(communityLayer);
     }
-    communityTimer = setTimeout(async () => {
-      if (map.getZoom() < 12) {
-        communityLayer.clearLayers();
-        return;
-      }
-      const b = map.getBounds().pad(0.2);
-      let cells8 = [];
-      try {
-        cells8 = h3.polygonToCells([
-          [b.getSouth(), b.getWest()], [b.getNorth(), b.getWest()],
-          [b.getNorth(), b.getEast()], [b.getSouth(), b.getEast()],
-        ], 8, true);
-      } catch (e) {
-        return;
-      }
-      if (!cells8.length || cells8.length > 400) return;
-      const key = cells8.sort().join();
-      if (key === communityKey) return;
-      communityKey = key;
-      try {
-        const rows = check(await sb.rpc('collective_map', { cells8 }));
-        communityCells = new Map(rows.map((r) => [r.cell, r]));
-        communityLayer.clearLayers();
-        for (const r of rows) {
-          L.polygon(h3.cellToBoundary(r.cell), {
-            pane: 'community', stroke: false, interactive: false,
-            fillColor: COMMUNITY_COLOR, fillOpacity: Math.min(0.15 + 0.1 * r.explorers, 0.65),
-          }).addTo(communityLayer);
-        }
-      } catch (err) {
-        communityKey = '';
-        fail(err);
-      }
-    }, 600);
   }
 
   map.on('click', (e) => {
     if (!communityOn) return;
-    const r = communityCells.get(h3.latLngToCell(e.latlng.lat, e.latlng.lng, 9));
-    if (!r) return;
+    const s = communityCells().get(h3.latLngToCell(e.latlng.lat, e.latlng.lng, 9));
+    if (!s) return;
     L.popup().setLatLng(e.latlng).setContent(h('div', {},
-      h('b', {}, `${r.explorers} explorer${r.explorers === 1 ? '' : 's'}`), h('br'),
-      `First here: ${r.first_username} (${new Date(r.first_visited).toLocaleDateString()})`)).openOn(map);
+      h('b', {}, `${s.explorers} explorer${s.explorers === 1 ? '' : 's'}`), h('br'),
+      `First here: ${s.first} (${new Date(s.firstAt).toLocaleDateString()})`)).openOn(map);
   });
 
   document.addEventListener('scoop:render', (e) => {
@@ -885,33 +678,33 @@
     drawCommunity();
   });
 
-  // ---------- leaderboards ----------
+  // ---------- leaderboard ----------
 
-  const rankPrefs = loadJSON('scoop.ranks', { scope: 'friends', period: 'week', metric: 'score' });
+  const rankPrefs = loadJSON(RANKS_KEY, { period: 'week', metric: 'score' });
 
-  async function renderRanks(panel) {
+  function renderRanks(panel) {
     const select = (key, options) => h('select', {
       'aria-label': key,
-      onchange: (e) => { rankPrefs[key] = e.target.value; saveJSON('scoop.ranks', rankPrefs); renderCommunity(); },
+      onchange: (e) => { rankPrefs[key] = e.target.value; saveJSON(RANKS_KEY, rankPrefs); renderCommunity(); },
     }, options.map(([v, label]) => h('option', { value: v, selected: rankPrefs[key] === v }, label)));
-    const rows = check(await sb.rpc('leaderboard', rankPrefs));
-    const unit = { score: 'pts', hexes: 'hexes', km: 'km' }[rankPrefs.metric];
-    fill(panel, 
+    const everyone = people();
+    const verified = core.meetupVerifier(everyone);
+    const since = rankPrefs.period === 'week' ? core.weekStart() : null;
+    const rows = core.rank(everyone.map((p) => ({
+      p, name: p.me ? `${p.name} (you)` : p.name, value: core.stats(p, { since, verified })[rankPrefs.metric],
+    })));
+    fill(panel,
       h('div', { class: 'filters' },
-        select('scope', [['friends', 'Friends'], ['public', 'Everyone']]),
         select('period', [['week', 'This week'], ['all', 'All time']]),
-        select('metric', [['score', 'Score'], ['hexes', 'Hexes'], ['km', 'Distance']])),
-      rows.length
-        ? h('ol', { class: 'list ranks' }, rows.map((r) => h('li', { class: r.user_id === uid() ? 'me' : '' },
-          h('span', { class: 'rank' }, String(r.rank)),
-          h('span', { class: 'who' }, nameOf(r)),
-          h('span', { class: 'val' }, `${Number(r.value).toLocaleString()} ${unit}`))))
-        : h('p', { class: 'fine' }, rankPrefs.scope === 'public'
-          ? 'No public profiles yet. Turn on "Public profile" in the Me tab to appear here.'
-          : 'No one here yet.'),
+        select('metric', [['score', 'Score'], ['hexes', 'New hexes'], ['km', 'Distance']])),
+      h('ol', { class: 'list ranks' }, rows.map((r) => h('li', { class: r.p.me ? 'me' : '' },
+        h('span', { class: 'rank' }, String(r.rank)),
+        h('span', { class: 'who' }, r.name),
+        h('span', { class: 'val' }, fmtVal(r.value, rankPrefs.metric))))),
+      friends.size ? null : sharePrompt('Swap Scoop files with friends to compete with them here.'),
       h('p', { class: 'fine' },
         'Score: 1 point per new street hex, bonus points for hexes you keep returning to (all-time only), ' +
-        'plus check-ins — photo 3, coffee or food 2, meeting a friend 5.'),
+        'plus check-ins — photo 3, coffee or food 2, meeting a friend 5. Friends count as of their last Scoop file.'),
     );
   }
 
@@ -920,139 +713,123 @@
   map.createPane('challenge').style.zIndex = '403';
   const challengeLayer = L.layerGroup([], { pane: 'challenge' }).addTo(map);
   let openChallenge = null;
-
-  function viewCells8() {
-    const b = map.getBounds();
-    return h3.polygonToCells([
-      [b.getSouth(), b.getWest()], [b.getNorth(), b.getWest()],
-      [b.getNorth(), b.getEast()], [b.getSouth(), b.getEast()],
-    ], 8, false);
-  }
+  let creatingChallenge = false;
 
   function challengeStatus(c) {
     const now = Date.now();
-    const end = Date.parse(c.ends_at);
-    if (end < now) return 'Finished';
-    if (Date.parse(c.starts_at) > now) return 'Not started';
-    const days = Math.ceil((end - now) / 86400000);
+    if (c.end < now) return 'Finished';
+    if (c.start > now) return 'Not started';
+    const days = Math.ceil((c.end - now) / core.DAY);
     return `${days} day${days === 1 ? '' : 's'} left`;
   }
 
-  async function renderChallenges(panel) {
-    if (openChallenge) return renderChallengeDetail(panel, openChallenge);
-    const rows = check(await sb.from('challenge_members')
-      .select('status, challenges(id, title, metric, starts_at, ends_at, creator, area_cells)')
-      .eq('user_id', uid()));
-    const list = rows.filter((r) => r.challenges)
-      .sort((a, b) => (a.challenges.ends_at < b.challenges.ends_at ? 1 : -1));
-    fill(panel, 
-      h('button', { class: 'primary', onclick: () => renderNewChallenge(panel).catch(fail) }, 'New challenge'),
+  function renderChallenges(panel) {
+    if (creatingChallenge) return renderNewChallenge(panel);
+    const c = openChallenge && challenges.find((x) => x.id === openChallenge);
+    if (c) return renderChallengeDetail(panel, c);
+    const list = [...challenges].sort((a, b) => b.end - a.end);
+    const setStatus = (ch, status) => () => {
+      if (status) ch.status = status;
+      else challenges = challenges.filter((x) => x !== ch);
+      saveChallenges();
+      renderCommunity();
+    };
+    fill(panel,
+      h('button', { class: 'primary', onclick: () => { creatingChallenge = true; renderCommunity(); } }, 'New challenge'),
       list.length
-        ? h('ul', { class: 'list' }, list.map((r) => {
-          const c = r.challenges;
-          return h('li', { class: 'person' },
-            h('span', {}, h('b', {}, c.title), h('small', {}, ` ${c.metric} · ${challengeStatus(c)}`)),
-            r.status === 'invited'
-              ? h('button', {
-                class: 'chip',
-                onclick: async () => {
-                  try {
-                    check(await sb.from('challenge_members').update({ status: 'joined' }).eq('challenge_id', c.id).eq('user_id', uid()));
-                    renderCommunity();
-                  } catch (err) {
-                    fail(err);
-                  }
-                },
-              }, 'Join')
-              : null,
-            h('button', { class: 'link', onclick: () => { openChallenge = c; renderCommunity(); } }, 'Open'));
-        }))
+        ? h('ul', { class: 'list' }, list.map((ch) => h('li', { class: 'person' },
+          h('span', {}, h('b', {}, ch.title),
+            h('small', {}, ` ${core.METRICS[ch.metric]} · ${challengeStatus(ch)}` +
+              (ch.status === 'invited' ? ` · from ${ch.names[ch.creator] || nameOf(ch.creator) || 'a friend'}` : ''))),
+          ch.status === 'invited' ? h('button', { class: 'chip', onclick: setStatus(ch, 'joined') }, 'Join') : null,
+          ch.status === 'invited'
+            ? h('button', { class: 'link', onclick: setStatus(ch, null) }, 'Decline')
+            : h('button', { class: 'link', onclick: () => { openChallenge = ch.id; renderCommunity(); } }, 'Open'))))
         : h('p', { class: 'fine' }, 'Race your friends: most new hexes, distance or score in a set time — optionally in one part of town.'),
     );
   }
 
-  async function renderChallengeDetail(panel, c) {
-    const rows = check(await sb.rpc('challenge_standings', { cid: c.id }));
-    const unit = { score: 'pts', hexes: 'hexes', km: 'km' }[c.metric];
-    const mine = rows.find((r) => r.user_id === uid());
+  function renderChallengeDetail(panel, c) {
+    const everyone = people();
+    const verified = core.meetupVerifier(everyone);
+    const byId = new Map(everyone.map((p) => [p.id, p]));
+    const until = Math.min(c.end, Date.now());
+    const scored = [];
+    const waiting = [];
+    for (const id of c.members) {
+      const p = byId.get(id);
+      if (!p) { waiting.push(c.names[id] || 'a friend'); continue; }
+      const value = c.start > Date.now() ? 0
+        : core.stats(p, { since: c.start, until, area: c.area, parent8, verified })[c.metric];
+      scored.push({ p, name: p.me ? `${p.name} (you)` : p.name, value });
+    }
     challengeLayer.clearLayers();
-    fill(panel, 
+    fill(panel,
       h('button', { class: 'link', onclick: () => { openChallenge = null; challengeLayer.clearLayers(); renderCommunity(); } }, '‹ All challenges'),
       h('h3', {}, c.title),
-      h('p', { class: 'fine' }, `${c.metric} · ${new Date(c.starts_at).toLocaleDateString()} – ${new Date(c.ends_at).toLocaleDateString()} · ${challengeStatus(c)}`,
-        c.area_cells ? ' · limited to an area' : ''),
-      h('ol', { class: 'list ranks' }, rows.map((r) => h('li', { class: r.user_id === uid() ? 'me' : '' },
-        h('span', { class: 'rank' }, r.status === 'joined' ? String(r.rank) : '–'),
-        h('span', { class: 'who' }, nameOf(r)),
-        h('span', { class: 'val' }, r.status === 'joined' ? `${Number(r.value).toLocaleString()} ${unit}` : 'invited')))),
-      c.area_cells ? h('button', {
+      h('p', { class: 'fine' }, `${core.METRICS[c.metric]} · ${new Date(c.start).toLocaleDateString()} – ${new Date(c.end).toLocaleDateString()} · ${challengeStatus(c)}`,
+        c.area ? ' · limited to an area' : ''),
+      h('ol', { class: 'list ranks' }, core.rank(scored).map((r) => h('li', { class: r.p.me ? 'me' : '' },
+        h('span', { class: 'rank' }, String(r.rank)),
+        h('span', { class: 'who' }, r.name),
+        h('span', { class: 'val' }, fmtVal(r.value, c.metric))))),
+      waiting.length ? h('p', { class: 'fine' }, `Waiting for a Scoop file from: ${waiting.join(', ')}`) : null,
+      sharePrompt('Everyone sees standings from the files they have. Send your Scoop file so friends get the challenge and your latest score.'),
+      c.area ? h('button', {
+        class: 'wide-btn',
         onclick: () => {
-          challengeLayer.clearLayers();
-          const area = L.polygon(h3.cellsToMultiPolygon(c.area_cells, false), {
+          const area = L.polygon(h3.cellsToMultiPolygon(c.area, false), {
             pane: 'challenge', color: COMMUNITY_COLOR, weight: 3, dashArray: '8 6', fillOpacity: 0.05, interactive: false,
           }).addTo(challengeLayer);
           S.closeSheet();
           map.fitBounds(area.getBounds(), { padding: [30, 30] });
         },
       }, 'Show area on map') : null,
-      c.creator === uid()
-        ? h('button', {
-          class: 'link danger',
-          onclick: async () => {
-            if (!confirm('Delete this challenge for everyone?')) return;
-            try {
-              check(await sb.from('challenges').delete().eq('id', c.id));
-              openChallenge = null;
-              renderCommunity();
-            } catch (err) {
-              fail(err);
-            }
-          },
-        }, 'Delete challenge')
-        : h('button', {
-          class: 'link danger',
-          onclick: async () => {
-            try {
-              check(await sb.from('challenge_members').delete().eq('challenge_id', c.id).eq('user_id', uid()));
-              openChallenge = null;
-              renderCommunity();
-            } catch (err) {
-              fail(err);
-            }
-          },
-        }, mine && mine.status === 'invited' ? 'Decline' : 'Leave challenge'),
+      h('button', {
+        class: 'link danger',
+        onclick: () => {
+          if (!confirm(c.creator === me.id ? 'Delete this challenge?' : 'Leave this challenge?')) return;
+          challenges = challenges.filter((x) => x.id !== c.id);
+          saveChallenges();
+          openChallenge = null;
+          renderCommunity();
+        },
+      }, c.creator === me.id ? 'Delete challenge' : 'Leave challenge'),
     );
   }
 
-  async function renderNewChallenge(panel) {
-    const friends = (await loadFriends()).filter((r) => r.status === 'accepted').map((r) => r.other);
+  function renderNewChallenge(panel) {
+    const list = [...friends.values()];
     const title = h('input', { placeholder: 'Weekend hex hunt', maxlength: '60', required: true });
     const metric = h('select', {}, [['hexes', 'Most new hexes'], ['km', 'Longest distance'], ['score', 'Highest score']]
       .map(([v, l]) => h('option', { value: v }, l)));
     const days = h('select', {}, [1, 3, 7, 14, 30].map((d) => h('option', { value: String(d), selected: d === 7 }, `${d} day${d === 1 ? '' : 's'}`)));
     const area = h('input', { type: 'checkbox' });
-    const picks = friends.map((p) => ({ p, box: h('input', { type: 'checkbox', checked: true }) }));
+    const picks = list.map((p) => ({ p, box: h('input', { type: 'checkbox', checked: true }) }));
     fill(panel, h('form', {
-      onsubmit: async (e) => {
+      onsubmit: (e) => {
         e.preventDefault();
-        try {
-          let areaCells = null;
-          if (area.checked) {
-            areaCells = viewCells8();
-            if (!areaCells.length || areaCells.length > 400) throw new Error('Zoom the map to the area you want first');
-          }
-          const start = new Date();
-          const c = check(await sb.from('challenges').insert({
-            title: title.value.trim(), metric: metric.value, area_cells: areaCells,
-            starts_at: start.toISOString(), ends_at: new Date(+start + Number(days.value) * 86400000).toISOString(),
-          }).select('id, title, metric, starts_at, ends_at, creator, area_cells').single());
-          const invites = picks.filter((x) => x.box.checked).map((x) => ({ challenge_id: c.id, user_id: x.p.id, status: 'invited' }));
-          if (invites.length) check(await sb.from('challenge_members').insert(invites));
-          openChallenge = c;
-          renderCommunity();
-        } catch (err) {
-          fail(err);
+        let areaCells = null;
+        if (area.checked) {
+          const b = map.getBounds();
+          areaCells = h3.polygonToCells([
+            [b.getSouth(), b.getWest()], [b.getNorth(), b.getWest()],
+            [b.getNorth(), b.getEast()], [b.getSouth(), b.getEast()],
+          ], 8, false);
+          if (!areaCells.length || areaCells.length > 400) return toast('Zoom the map to the area you want first');
         }
+        const start = Date.now();
+        const members = [me.id, ...picks.filter((x) => x.box.checked).map((x) => x.p.id)];
+        const c = {
+          id: newId(), creator: me.id, title: title.value.trim(), metric: metric.value,
+          start, end: start + Number(days.value) * core.DAY, area: areaCells, members,
+          names: Object.fromEntries(members.map((m) => [m, nameOf(m)])), status: 'joined',
+        };
+        challenges.push(c);
+        saveChallenges();
+        creatingChallenge = false;
+        openChallenge = c.id;
+        renderCommunity();
       },
     },
     h('label', { class: 'field' }, h('span', {}, 'Name'), title),
@@ -1061,98 +838,72 @@
     h('label', { class: 'row' }, h('span', {}, 'Only count hexes in the area on the map now', h('small', {}, 'Distance counts everywhere')), area),
     h('h3', {}, 'Invite'),
     picks.length
-      ? picks.map((x) => h('label', { class: 'row' }, h('span', {}, nameOf(x.p)), x.box))
-      : h('p', { class: 'fine' }, 'Add friends first to race them.'),
+      ? picks.map((x) => h('label', { class: 'row' }, h('span', {}, x.p.name), x.box))
+      : h('p', { class: 'fine' }, 'Add friends first to race them — or race yourself.'),
     h('button', { class: 'primary', type: 'submit' }, 'Start challenge'),
-    h('button', { class: 'link', type: 'button', onclick: () => renderCommunity() }, 'Cancel')));
+    h('button', { class: 'link', type: 'button', onclick: () => { creatingChallenge = false; renderCommunity(); } }, 'Cancel')));
   }
 
-  // ---------- me: profile, badges, streak ----------
+  // ---------- me: name, score, streak, badges ----------
 
-  async function renderMe(panel) {
-    const [badges, board] = await Promise.all([
-      sb.from('badges').select('badge_key, earned_at').eq('user_id', uid()).then(check),
-      sb.rpc('leaderboard', { scope: 'friends', metric: 'score', period: 'all' }).then(check),
-    ]);
-    const earned = new Map(badges.map((b) => [b.badge_key, b.earned_at]));
-    const me = board.find((r) => r.user_id === uid());
+  function renderMe(panel) {
+    const p = myPerson();
+    const verified = core.meetupVerifier(people());
+    const earned = core.badges(p, verified);
+    const all = core.stats(p, { verified });
     const streak = core.streaks(S.walks.map((w) => w.start));
-    const f = profileFields(profile);
-    fill(panel, 
+    const name = h('input', { value: me.name, maxlength: '40', required: true });
+    fill(panel,
       h('div', { class: 'me-stats' },
-        h('div', {}, h('b', {}, me ? Number(me.value).toLocaleString() : '0'), h('small', {}, 'score')),
+        h('div', {}, h('b', {}, all.score.toLocaleString()), h('small', {}, 'score')),
         h('div', {}, h('b', {}, `${streak.current}🔥`), h('small', {}, 'day streak')),
         h('div', {}, h('b', {}, String(streak.longest)), h('small', {}, 'best streak')),
         h('div', {}, h('b', {}, `${earned.size}/${Object.keys(core.BADGES).length}`), h('small', {}, 'badges'))),
+      h('p', { class: 'fine' }, `Score: ${all.hexes.toLocaleString()} hexes + ${all.repeat.toLocaleString()} for repeat visits + ${all.checkinPts.toLocaleString()} from check-ins.`),
       h('h3', {}, 'Badges'),
       h('ul', { class: 'badges' }, Object.entries(core.BADGES).map(([key, b]) => h('li', {
-        class: earned.has(key) ? 'earned' : '',
-        title: earned.has(key) ? `${b.desc} — earned ${new Date(earned.get(key)).toLocaleDateString()}` : b.desc,
+        class: earned.has(key) ? 'earned' : '', title: b.desc,
       }, h('span', { class: 'icon' }, b.icon), h('span', {}, b.label), h('small', {}, b.desc)))),
-      h('h3', {}, 'Profile'),
+      h('h3', {}, 'Your name'),
       h('form', {
-        onsubmit: async (e) => {
+        class: 'inline',
+        onsubmit: (e) => {
           e.preventDefault();
-          try {
-            profile = check(await sb.from('profiles').update(readProfile(f)).eq('id', uid()).select(PROFILE_COLS).single());
-            toast('Profile saved');
-            if (communityOn) { communityKey = ''; drawCommunity(); }
-          } catch (err) {
-            fail(profileError(err));
-          }
+          if (!name.value.trim()) return;
+          me.name = name.value.trim();
+          saveJSON(ME_KEY, me);
+          toast('Saved — friends see it in your next Scoop file');
         },
-      }, profileForm(f), h('button', { type: 'submit' }, 'Save profile')),
-      h('h3', {}, 'Sync'),
-      h('p', { class: 'fine', id: 'syncStatus' }, syncStatus),
-      h('div', { class: 'buttons' },
-        h('button', { onclick: () => sync() }, 'Sync now'),
-        h('button', { onclick: () => sb.auth.signOut() }, 'Sign out')),
-      h('button', { class: 'link danger', onclick: deleteAccount }, 'Delete my account and community data'),
+      }, name, h('button', { type: 'submit' }, 'Save')),
+      sharePrompt('Export backup (in the menu) includes your check-ins and name. Friends\' files aren\'t backed up — ask them to resend.'),
     );
-  }
-
-  async function deleteAccount() {
-    if (!confirm('Delete your account, friends, check-ins and everything you uploaded? Your map on this device stays.')) return;
-    try {
-      const files = check(await sb.storage.from(PHOTO_BUCKET).list(uid(), { limit: 1000 }));
-      if (files.length) check(await sb.storage.from(PHOTO_BUCKET).remove(files.map((f) => `${uid()}/${f.name}`)));
-      check(await sb.rpc('delete_my_account'));
-      syncState = { uid: null, cells: {}, walks: [] };
-      saveSync();
-      await sb.auth.signOut();
-      toast('Account deleted');
-    } catch (err) {
-      fail(err);
-    }
   }
 
   // ---------- check-ins ----------
 
   const checkinLayer = L.layerGroup().addTo(map);
 
-  async function loadCheckinMarkers() {
-    if (!profile) return;
-    try {
-      const since = new Date(Date.now() - 30 * 86400000).toISOString();
-      const rows = check(await sb.from('checkins')
-        .select('id, user_id, cell, kind, note, met_with, created_at, author:profiles!checkins_user_id_fkey(username, display_name)')
-        .gte('created_at', since).order('created_at', { ascending: false }).limit(300));
-      checkinLayer.clearLayers();
-      for (const r of rows) {
-        const kind = core.CHECKIN_KINDS[r.kind];
-        L.marker(h3.cellToLatLng(r.cell), {
-          icon: L.divIcon({ className: `checkin-pin${r.user_id === uid() ? ' mine' : ''}`, html: kind.icon, iconSize: [30, 30] }),
-          title: `${nameOf(r.author)}: ${kind.label}`,
-        }).bindPopup(() => h('div', {},
-          h('b', {}, nameOf(r.author)), ` · ${kind.label}`, h('br'),
-          r.note ? [r.note, h('br')] : null,
-          h('small', {}, core.timeAgo(Date.parse(r.created_at)))))
-          .addTo(checkinLayer);
+  function loadCheckinMarkers() {
+    checkinLayer.clearLayers();
+    const since = Date.now() - 30 * core.DAY;
+    for (const p of people()) {
+      for (const c of p.checkins) {
+        if (c.time < since) continue;
+        const kind = core.CHECKIN_KINDS[c.kind];
+        L.marker(h3.cellToLatLng(c.cell), {
+          icon: L.divIcon({ className: `checkin-pin${p.me ? ' mine' : ''}`, html: kind.icon, iconSize: [30, 30] }),
+          title: `${p.me ? 'You' : p.name}: ${kind.label}`,
+        }).bindPopup(() => {
+          const img = h('img', { class: 'popup-photo', alt: '', hidden: true });
+          if (p.me && c.photo) photoUrl(c.id).then((url) => { if (url) { img.src = url; img.hidden = false; } }).catch(() => {});
+          return h('div', {},
+            h('b', {}, p.me ? 'You' : p.name), ` · ${kind.label}`, h('br'),
+            c.note ? [c.note, h('br')] : null,
+            h('small', {}, core.timeAgo(c.time)), img);
+        }).addTo(checkinLayer);
       }
-      toggleCheckinMarkers();
-    } catch (err) {
-      // Markers are a nice-to-have; don't nag when offline.
     }
+    toggleCheckinMarkers();
   }
 
   function toggleCheckinMarkers() {
@@ -1181,62 +932,67 @@
   function renderCheckin() {
     const cell = hereCell();
     const body = $('checkinBody');
-    if (!cell) return body.replaceChildren(h('p', {}, 'Waiting for your location…'));
+    if (!cell) return fill(body, h('p', {}, 'Waiting for your location…'));
     if (!S.visited.has(cell)) {
-      return body.replaceChildren(h('p', {}, 'Walk through this hex first — you can only check in where you\'ve explored.'));
+      return fill(body, h('p', {}, 'Walk through this hex first — you can only check in where you\'ve explored.'));
     }
-    if (isHidden(cell)) return body.replaceChildren(h('p', {}, 'This hex is inside one of your privacy zones, so it can\'t be shared.'));
     const note = h('input', { placeholder: 'Add a note (optional)', maxlength: '140' });
     const photo = h('input', { type: 'file', accept: 'image/*', capture: 'environment' });
     const photoHint = h('small', {});
     const kinds = h('div', { class: 'kinds', role: 'radiogroup' });
     const drawKinds = () => {
-      kinds.replaceChildren(...Object.entries(core.CHECKIN_KINDS).map(([key, k]) => h('button', {
+      fill(kinds, Object.entries(core.CHECKIN_KINDS).map(([key, k]) => h('button', {
         type: 'button', class: 'kind', role: 'radio', 'aria-checked': String(key === checkinKind),
         onclick: () => { checkinKind = key; drawKinds(); },
       }, h('span', { class: 'icon' }, k.icon), k.label, h('small', {}, `+${k.points}`))));
       photoHint.textContent = checkinKind === 'photo' ? 'Required' : 'Optional';
-      if (checkinKind === 'meetup') photoHint.textContent += ' — the meetup counts once a friend checks in here within 30 minutes';
+      if (checkinKind === 'meetup') photoHint.textContent += ' — the meetup counts once a friend\'s Scoop file shows them checking in here within 30 minutes';
     };
     drawKinds();
     const submit = h('button', { class: 'primary', type: 'submit' }, 'Check in');
-    body.replaceChildren(h('form', {
-      onsubmit: async (e) => {
-        e.preventDefault();
-        const file = photo.files[0];
-        if (checkinKind === 'photo' && !file) return toast('Add a photo first');
-        submit.disabled = true;
-        try {
-          await sync(); // the server only accepts check-ins in hexes it knows you walked
-          let photoPath = null;
-          if (file) {
-            photoPath = `${uid()}/${Date.now()}.jpg`;
-            check(await sb.storage.from(PHOTO_BUCKET).upload(photoPath, await compressPhoto(file), { contentType: 'image/jpeg' }));
+    fill(body,
+      isHidden(cell) ? h('p', { class: 'fine' }, 'This hex is inside a privacy zone: the check-in stays on this phone and isn\'t put in your Scoop file.') : null,
+      h('form', {
+        onsubmit: async (e) => {
+          e.preventDefault();
+          const file = photo.files[0];
+          if (checkinKind === 'photo' && !file) return toast('Add a photo first');
+          const now = Date.now();
+          if (checkins.some((c) => c.cell === cell && c.kind === checkinKind && localDay(c.time) === localDay(now))) {
+            return toast('You already checked in like that here today');
           }
-          const { id } = check(await sb.from('checkins')
-            .insert({ cell, kind: checkinKind, note: note.value.trim() || null, photo_path: photoPath })
-            .select('id').single());
-          // Read it back: a trigger links the meetup after the insert returns.
-          const row = check(await sb.from('checkins').select('met_with').eq('id', id).single());
-          S.closeSheet();
-          const k = core.CHECKIN_KINDS[checkinKind];
-          if (checkinKind !== 'meetup') toast(`${k.icon} Checked in · +${k.points} points`);
-          else toast(row.met_with ? '🤝 Meetup verified · +5 points' : '🤝 Checked in — waiting for a friend to check in here');
-          loadCheckinMarkers();
-        } catch (err) {
-          fail(err.code === '23505' ? new Error('You already checked in like that here today') : err);
-        } finally {
-          submit.disabled = false;
-        }
+          submit.disabled = true;
+          try {
+            const c = { id: newId(), cell, kind: checkinKind, time: now, note: note.value.trim(), photo: false };
+            if (file) {
+              await idb.set(`photo:${c.id}`, await compressPhoto(file));
+              c.photo = true;
+            }
+            checkins.push(c);
+            if (!saveCheckins()) {
+              checkins.pop();
+              return;
+            }
+            S.closeSheet();
+            const k = core.CHECKIN_KINDS[checkinKind];
+            const verified = core.meetupVerifier(people());
+            if (checkinKind !== 'meetup') toast(`${k.icon} Checked in · +${k.points} points`);
+            else toast(verified(myPerson(), c) ? '🤝 Meetup matched · +5 points' : '🤝 Checked in — it counts once your friend\'s file shows them here too');
+            loadCheckinMarkers();
+          } catch (err) {
+            fail(err);
+          } finally {
+            submit.disabled = false;
+          }
+        },
       },
-    },
-    kinds,
-    h('label', { class: 'field' }, h('span', {}, 'Note'), note),
-    h('label', { class: 'field' }, h('span', {}, 'Photo ', photoHint), photo),
-    submit));
+      kinds,
+      h('label', { class: 'field' }, h('span', {}, 'Note'), note),
+      h('label', { class: 'field' }, h('span', {}, 'Photo ', photoHint), photo),
+      submit));
   }
 
-  /** Downscale to at most 1280 px and re-encode as JPEG (also strips EXIF location). */
+  /** Downscale to at most 1280 px and re-encode as JPEG (also drops EXIF location). */
   async function compressPhoto(file) {
     const img = await createImageBitmap(file);
     const scale = Math.min(1, 1280 / Math.max(img.width, img.height));
@@ -1247,6 +1003,12 @@
 
   // ---------- boot ----------
 
+  loadCheckinMarkers();
+  loadFriends();
+
   // Exposed for debugging and end-to-end tests.
-  window.scoopSocial = { sb, sync, get profile() { return profile; } };
+  window.scoopSocial = {
+    friends, shareMyFile,
+    get me() { return me; }, get checkins() { return checkins; }, get challenges() { return challenges; },
+  };
 })();

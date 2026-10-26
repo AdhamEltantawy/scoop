@@ -726,13 +726,20 @@
     saveSettings();
   });
 
-  // Backup
+  // Backup. Other parts of the app (social.js) can add their own data to it.
+  /** @type {Record<string, {save: () => any, restore: (data: any) => void}>} */
+  const backupParts = {};
+  function registerBackup(name, part) {
+    backupParts[name] = part;
+  }
+
   $('btnExport').addEventListener('click', async () => {
     saveNow();
     const data = {
       app: 'scoop', version: 1, exported: new Date().toISOString(), baseRes: BASE_RES,
       cells: Object.fromEntries(visited), visits: Object.fromEntries(visits), walks,
     };
+    for (const [name, part] of Object.entries(backupParts)) data[name] = part.save();
     const name = `scoop-backup-${new Date().toISOString().slice(0, 10)}.json`;
     if (isNative) {
       // The Android WebView can't download files, so hand it to the share sheet
@@ -764,6 +771,7 @@
     if (!file) return;
     try {
       const data = JSON.parse(await file.text());
+      if (data && data.app === 'scoop-friend') throw new Error('that\'s a friend\'s Scoop file — add it under Community → Friends');
       if (!data || typeof data.cells !== 'object') throw new Error('not a Scoop backup');
       let added = 0;
       for (const [c, ts] of Object.entries(data.cells)) {
@@ -778,6 +786,7 @@
       const knownStarts = new Set(walks.map((w) => w.start));
       for (const w of data.walks || []) if (!knownStarts.has(w.start)) walks.push(w);
       walks.sort((a, b) => a.start - b.start);
+      for (const [name, part] of Object.entries(backupParts)) if (data[name]) part.restore(data[name]);
       saveNow();
       render();
       emit('changed', {});
@@ -858,6 +867,7 @@
     walks.length = 0;
     if (walk) { walk.newCells.clear(); walk.pending = []; }
     saveNow();
+    emit('cleared', {});
     render();
     closeSheet();
     toast('All cleared');
@@ -897,7 +907,7 @@
   // Used by social.js (community features) and handy for debugging from the console.
   window.scoop = {
     BASE_RES, COLORS, map, visited, visits, visitCount, walks, settings, isNative, Filesystem, Share, App,
-    render, scheduleRender, toDisplay, toast, formatNum, cellAreaCached, haversine, openSheet, closeSheet,
+    render, scheduleRender, registerBackup, toDisplay, toast, formatNum, cellAreaCached, haversine, openSheet, closeSheet,
     position: () => lastPos,
     walking: () => !!walk,
   };

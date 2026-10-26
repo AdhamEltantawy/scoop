@@ -1,12 +1,11 @@
 // Offline support: the app shell is cached; map tiles come from the network
 // (the browser's normal HTTP cache keeps recently viewed tiles).
-const CACHE = 'scoop-shell-v3';
+const CACHE = 'scoop-shell-v4';
 const SHELL = [
   './',
   'index.html',
   'style.css',
   'app.js',
-  'config.js',
   'social-core.js',
   'social.js',
   'manifest.webmanifest',
@@ -16,7 +15,6 @@ const SHELL = [
   'vendor/leaflet.css',
   'vendor/h3-js.umd.js',
   'vendor/capacitor.js',
-  'vendor/supabase.js',
 ];
 
 self.addEventListener('install', (event) => {

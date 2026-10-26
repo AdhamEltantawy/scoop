@@ -159,6 +159,7 @@ body.walking.too-fast .speed-hint { display: block; }
   background: #2b3448; border: 0; border-radius: 10px; padding: 10px 12px; font-weight: 600; white-space: nowrap;
 }
 .buttons .wide { grid-column: 1 / -1; }
+.wide-btn { width: 100%; margin-top: 10px; background: #2b3448; border: 0; border-radius: 10px; padding: 12px; font-weight: 600; }
 button:disabled { opacity: 0.5; cursor: default; }
 
 .zone-list { list-style: none; margin: 0; padding: 0; }
@@ -174,9 +175,8 @@ button:disabled { opacity: 0.5; cursor: default; }
   display: flex; flex-direction: column; gap: 10px;
 }
 .side-controls .fab { width: 46px; height: 46px; }
-.community-only, .checkin-only { display: none !important; }
-body.community-on .community-only { display: grid !important; }
-body.signed-in.has-fix .checkin-only { display: grid !important; }
+.checkin-only { display: none !important; }
+body.has-fix .checkin-only { display: grid !important; }
 body.walking .side-controls { bottom: calc(118px + var(--safe-bottom)); }
 
 .compare-bar {
@@ -274,3 +274,6 @@ body.comparing .toast { top: calc(118px + var(--safe-top)); }
 }
 .checkin-pin.mine { border-color: var(--accent); }
 .leaflet-popup-content { color: #1d2433; }
+.photo[hidden], .popup-photo[hidden] { display: none; }
+.popup-photo { display: block; max-width: 200px; max-height: 200px; border-radius: 8px; margin-top: 6px; }
+.invite small { display: block; line-height: 1.35; }
