@@ -25,7 +25,21 @@
     <div class="stat walk-only"><span class="num" id="statWalkDist">0</span><span class="lbl">km</span></div>
   </header>
 
+  <div class="compare-bar" id="compareBar" hidden>
+    <span id="compareText"></span>
+    <button id="btnCompareClose" aria-label="Stop comparing">✕</button>
+  </div>
+
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+  <nav class="side-controls">
+    <button class="fab community-only" id="btnCommunity" aria-label="Community" title="Community">
+      <svg viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.2"/><path d="M3.5 19c0-3 2.5-5 5.5-5s5.5 2 5.5 5"/><circle cx="17" cy="9" r="2.4"/><path d="M15.5 14.2c2.8-.4 5 1.4 5 4.3"/></svg>
+    </button>
+    <button class="fab checkin-only" id="btnCheckin" aria-label="Check in here" title="Check in here">
+      <svg viewBox="0 0 24 24"><path d="M12 21s-6.5-6-6.5-11a6.5 6.5 0 0 1 13 0c0 5-6.5 11-6.5 11z"/><path d="M9.5 10l1.8 1.8L15 8.2"/></svg>
+    </button>
+  </nav>
 
   <nav class="controls">
     <button class="fab" id="btnMenu" aria-label="Menu" title="Menu">
@@ -87,7 +101,14 @@
       </select>
     </label>
 
+    <div class="row">
+      <span>Privacy zones<small>Hexes around these spots are never uploaded or put on share cards.</small></span>
+      <button id="btnAddZone" class="small">Add at map centre</button>
+    </div>
+    <ul class="zone-list" id="zoneList"></ul>
+
     <div class="buttons">
+      <button id="btnShareCard" class="wide">Share my map as an image</button>
       <button id="btnImportGpx">Import GPX…</button>
       <button id="btnExport">Export backup</button>
       <button id="btnImport">Restore backup…</button>
@@ -96,14 +117,32 @@
     <input type="file" id="fileGpx" accept=".gpx,application/gpx+xml,application/xml,text/xml" multiple hidden>
     <input type="file" id="fileJson" accept=".json,application/json" hidden>
 
-    <p class="fine">Your data stays on this device. Export a backup now and then.
+    <p class="fine">Your map is stored on this device — export a backup now and then.
+      <span id="communityNote">If you sign in to Community, only hex ids, visit counts and walk totals are uploaded, never your GPS tracks.</span>
       <span id="walkTip">Keep the screen on while walking: phones pause location in background tabs.</span></p>
     <button class="close" id="btnClose">Done</button>
+  </section>
+
+  <section class="sheet" id="communitySheet" aria-label="Community" hidden>
+    <h2>Community</h2>
+    <div class="tabs" id="communityTabs" role="tablist" hidden></div>
+    <div id="communityBody"></div>
+    <button class="close" id="btnCommunityClose">Done</button>
+  </section>
+
+  <section class="sheet" id="checkinSheet" aria-label="Check in" hidden>
+    <h2>Check in here</h2>
+    <div id="checkinBody"></div>
+    <button class="close secondary" id="btnCheckinClose">Cancel</button>
   </section>
 
   <script src="vendor/capacitor.js"></script>
   <script src="vendor/leaflet.js"></script>
   <script src="vendor/h3-js.umd.js"></script>
+  <script src="config.js"></script>
+  <script src="vendor/supabase.js"></script>
   <script src="app.js"></script>
+  <script src="social-core.js"></script>
+  <script src="social.js"></script>
 </body>
 </html>

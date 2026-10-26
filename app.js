@@ -57,6 +57,9 @@
   const visited = new Map(Object.entries(stored.cells || {}));
   /** @type {{start:number,end:number,km:number,newCells:number}[]} */
   const walks = Array.isArray(stored.walks) ? stored.walks : [];
+  /** @type {Map<string, number>} cell -> number of walks through it (older data has none: counts as 1) */
+  const visits = new Map(Object.entries(stored.visits || {}));
+  const visitCount = (c) => visits.get(c) || (visited.has(c) ? 1 : 0);
 
   const settings = Object.assign(
     { res: 9, grid: true, accuracy: 40, basemap: 'osm', activity: 'walk', view: null },
@@ -70,7 +73,7 @@
   }
   function saveNow() {
     clearTimeout(saveTimer);
-    saveJSON(STORAGE_KEY, { version: 1, cells: Object.fromEntries(visited), walks });
+    saveJSON(STORAGE_KEY, { version: 1, cells: Object.fromEntries(visited), visits: Object.fromEntries(visits), walks });
   }
   function saveSettings() {
     saveJSON(SETTINGS_KEY, settings);
@@ -126,8 +129,8 @@
 
   // ---------- marking ----------
 
-  // { start, km, newCells:Set, lastCell, lastFix, history, pending, moving,
-  //   fastCount, fastSince, slowSince, slowFixes }
+  // { start, km, newCells:Set, cells:Set, lastCell, lastFix, history, pending,
+  //   moving, fastCount, fastSince, slowSince, slowFixes }
   let walk = null;
 
   /** Mark base-res cells as visited. Returns how many were new. */
@@ -135,6 +138,7 @@
     const now = Date.now();
     let added = 0;
     for (const c of cells) {
+      if (walk) walk.cells.add(c);
       if (!visited.has(c)) {
         visited.set(c, now);
         added++;
@@ -338,6 +342,7 @@
     }
 
     updateHereHex();
+    emit('render', { display });
   }
 
   const areaCache = new Map();
@@ -600,9 +605,19 @@
 
   function newWalk(start) {
     return {
-      start, km: 0, newCells: new Set(), lastCell: null, lastFix: null,
+      start, km: 0, newCells: new Set(), cells: new Set(), lastCell: null, lastFix: null,
       history: [], pending: [], moving: false, fastCount: 0, fastSince: 0, slowSince: null, slowFixes: [],
     };
+  }
+
+  /** Count one more visit for every cell the finished walk went through. */
+  function countVisits() {
+    for (const c of walk.cells) visits.set(c, walk.newCells.has(c) ? 1 : visitCount(c) + 1);
+  }
+
+  /** Tell other parts of the app (community sync) that walks were added or data changed. */
+  function emit(name, detail) {
+    document.dispatchEvent(new CustomEvent('scoop:' + name, { detail }));
   }
 
   function startWalk() {
@@ -633,8 +648,10 @@
     const summary = { start: walk.start, end: Date.now(), km: +walk.km.toFixed(3), newCells: walk.newCells.size };
     if (summary.km > 0 || summary.newCells > 0) walks.push(summary);
     const newDisplay = new Set([...walk.newCells].map(toDisplay)).size;
+    countVisits();
     walk = null;
     saveNow();
+    emit('changed', { walk: summary });
     document.body.classList.remove('walking');
     $('btnWalk').setAttribute('aria-pressed', 'false');
     $('walkLabel').textContent = 'Start walk';
@@ -661,15 +678,17 @@
 
   // ---------- menu / settings ----------
 
-  function openSheet() {
-    $('sheet').hidden = false;
+  function openSheet(id = 'sheet') {
+    closeSheet();
+    $(id).hidden = false;
     $('sheetBackdrop').hidden = false;
   }
   function closeSheet() {
-    $('sheet').hidden = true;
+    for (const el of document.querySelectorAll('.sheet')) el.hidden = true;
     $('sheetBackdrop').hidden = true;
   }
-  $('btnMenu').addEventListener('click', openSheet);
+  const anySheetOpen = () => !!document.querySelector('.sheet:not([hidden])');
+  $('btnMenu').addEventListener('click', () => openSheet());
   $('btnClose').addEventListener('click', closeSheet);
   $('sheetBackdrop').addEventListener('click', closeSheet);
 
@@ -712,7 +731,7 @@
     saveNow();
     const data = {
       app: 'scoop', version: 1, exported: new Date().toISOString(), baseRes: BASE_RES,
-      cells: Object.fromEntries(visited), walks,
+      cells: Object.fromEntries(visited), visits: Object.fromEntries(visits), walks,
     };
     const name = `scoop-backup-${new Date().toISOString().slice(0, 10)}.json`;
     if (isNative) {
@@ -753,11 +772,15 @@
         if (prev === undefined) added++;
         visited.set(c, prev === undefined ? ts : Math.min(prev, ts));
       }
+      for (const [c, n] of Object.entries(data.visits || {})) {
+        if (visited.has(c) && Number.isInteger(n) && n > visitCount(c)) visits.set(c, n);
+      }
       const knownStarts = new Set(walks.map((w) => w.start));
       for (const w of data.walks || []) if (!knownStarts.has(w.start)) walks.push(w);
       walks.sort((a, b) => a.start - b.start);
       saveNow();
       render();
+      emit('changed', {});
       toast(`Restored — ${added.toLocaleString()} new cells merged`);
       closeSheet();
     } catch (err) {
@@ -771,6 +794,8 @@
     for (const p of points) recordFix(L.latLng(p.lat, p.lng), 0, p.time, null);
     if (!walk.moving) commitPending();
     const result = { start: walk.start, end: points[points.length - 1].time, km: walk.km, newCells: walk.newCells.size };
+    // Re-importing the same file shouldn't count as walking there again.
+    if (!walks.some((w) => w.start === result.start)) countVisits();
     walk = null;
     document.body.classList.remove('too-fast');
     return result;
@@ -821,6 +846,7 @@
       render();
       closeSheet();
       map.fitBounds(bounds, { padding: [40, 40] });
+      emit('changed', {});
       toast(`Imported ${km.toFixed(2)} km of walking — ${added.toLocaleString()} new cells`, 4000);
     }
   });
@@ -828,6 +854,7 @@
   $('btnClear').addEventListener('click', () => {
     if (!confirm('Erase every visited hex and walk on this device? This cannot be undone.')) return;
     visited.clear();
+    visits.clear();
     walks.length = 0;
     if (walk) { walk.newCells.clear(); walk.pending = []; }
     saveNow();
@@ -858,7 +885,7 @@
   // background (instead of quitting) so a walk in progress keeps recording.
   if (App) {
     App.addListener('backButton', () => {
-      if (!$('sheet').hidden) closeSheet();
+      if (anySheetOpen()) closeSheet();
       else App.minimizeApp();
     });
   }
@@ -867,6 +894,12 @@
     navigator.serviceWorker.register('sw.js').catch(() => {});
   }
 
-  // Handy for debugging from the console.
-  window.scoop = { visited, walks, settings, render };
+  // Used by social.js (community features) and handy for debugging from the console.
+  window.scoop = {
+    BASE_RES, COLORS, map, visited, visits, visitCount, walks, settings, isNative, Filesystem, Share, App,
+    render, scheduleRender, toDisplay, toast, formatNum, cellAreaCached, haversine, openSheet, closeSheet,
+    position: () => lastPos,
+    walking: () => !!walk,
+  };
+  emit('ready', window.scoop);
 })();
