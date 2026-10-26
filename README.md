@@ -27,8 +27,63 @@ explored yet.
 - **GPX import**: bring in past walks exported from Strava, Komoot, Garmin and
   similar apps. Imported tracks get the same walking-only check, so the file
   needs timestamps.
-- **Backup / restore** as JSON. All data stays on your device (`localStorage`).
+- **Backup / restore** as JSON. Your map lives on your device (`localStorage`).
 - **Installable and offline**: add it to your home screen and it opens like an app.
+- **Share cards**: turn the part of the map you're looking at, plus your totals,
+  into an image for the share sheet. No account needed.
+- **Privacy zones**: up to 3 circles (around home or work, say). Hexes inside them
+  are never uploaded and never appear on share cards. Zones stay on your device.
+
+## Community (optional)
+
+Sign in with an emailed code to make Scoop social:
+
+- **Friends**: add each other with an invite code or link. Friends see each
+  other's maps, walks and check-ins. Nobody else does.
+- **Compare**: overlay a friend's hexes on your map, with a count of hexes you
+  share, hexes only you have and hexes only they have.
+- **Feed and kudos**: friends' walks, check-ins and badges, with emoji kudos.
+- **Check-ins and hex scores**: check in at a hex you've walked through with a
+  photo (+3), coffee (+2), food (+2), or a meetup (+5, but only once a friend
+  checks in at the same hex within 30 minutes). Hexes also score for repeat
+  visits: +1 at 2 visits, +2 at 4, +3 at 8, and so on.
+- **Leaderboards**: friends or everyone, this week or all time, ranked by
+  score, new hexes or distance.
+- **Challenges**: race invited friends over 1–30 days. Optionally count only the
+  hexes in one part of town.
+- **Community map**: blocks explored by you, your friends and public profiles,
+  plus who got there first.
+- **Badges and streaks**: 12 badges, plus your current and best daily walking streak.
+
+What gets uploaded: hex ids, visit counts and walk totals (start, end, km,
+new hexes). **GPS tracks are never uploaded.** See [privacy.html](privacy.html).
+Without an account, nothing changes and nothing leaves your device.
+
+### Setting up the backend
+
+The community features run on [Supabase](https://supabase.com) (the free tier is
+enough). Until `config.js` is filled in, the app runs without them.
+
+1. Create a Supabase project.
+2. Apply the schema. Either run `supabase db push` with the
+   [Supabase CLI](https://supabase.com/docs/guides/cli), or paste
+   `supabase/migrations/*.sql` into the SQL editor. This creates the tables, row
+   level security, the scoring and leaderboard functions, and the private
+   `checkin-photos` storage bucket.
+3. *Authentication → Emails*: add `{{ .Token }}` to the *Magic Link* and *Confirm signup* templates so the
+   email includes the 6-digit code the app asks for. Email sign-in is enabled
+   by default.
+4. Copy the project URL and the **anon** key from *Project Settings → API* into
+   `config.js`. The anon key is public by design, because row level security
+   decides what each user can do. Never put the `service_role` key in the app.
+
+## Tests
+
+```sh
+npm test          # unit tests for the community helpers (node --test)
+npm run test:db   # schema + row level security tests against a local Postgres 16
+                  # (set PGURL to a superuser connection, default postgres:///postgres)
+```
 
 ## Android app
 
@@ -69,8 +124,8 @@ backup first.
 
 ## Running it in a browser
 
-It's a static site with no build step. Leaflet and h3-js are included in
-`vendor/`.
+It's a static site with no build step. Leaflet, h3-js and supabase-js are
+included in `vendor/`.
 
 **Locally:**
 
@@ -100,8 +155,12 @@ location to web apps once the screen locks.
 | --- | --- |
 | `index.html`, `style.css` | UI |
 | `app.js` | Map, H3 logic, GPS tracking, storage |
+| `social.js`, `social-core.js`, `config.js` | Community features, share cards, privacy zones |
+| `supabase/migrations/` | Database schema, row level security, scoring (Supabase) |
+| `supabase/tests/`, `scripts/test-db.sh`, `tests/` | Schema and unit tests |
+| `privacy.html` | Privacy notice |
 | `sw.js`, `manifest.webmanifest`, `icons/` | Install / offline support |
-| `vendor/` | Leaflet 1.9.4, h3-js 4.1.0, Capacitor core runtime (with licenses) |
+| `vendor/` | Leaflet 1.9.4, h3-js 4.1.0, supabase-js 2.117.2, Capacitor core runtime (with licenses) |
 | `android/`, `capacitor.config.json`, `scripts/build-web.mjs` | Android app (Capacitor) |
 | `assets/` | Source images for the Android icon and splash screen |
 
