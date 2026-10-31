@@ -1,12 +1,13 @@
 /* Scoop — explore your city on foot, one hexagon at a time.
  *
- * Visited cells are always stored at BASE_RES (the finest size). Coarser
- * hex sizes are derived on the fly with cellToParent, so switching sizes
- * never loses detail.
+ * The map uses one hex size: H3 resolution 10 (street hexes, ~0.015 km²).
+ * Explored hexes stay explored, but they cool down: a hex's heat halves every
+ * 30 days since you last walked through it (see heat() in social-core.js).
  */
 (() => {
   'use strict';
 
+  const core = window.ScoopCore;
   const BASE_RES = 10;
   const STORAGE_KEY = 'scoop.v1';
   const SETTINGS_KEY = 'scoop.settings.v1';
@@ -30,6 +31,17 @@
     grid: '#1d2433',
     here: '#2f6bff',
   };
+
+  // Explored hexes are drawn in heat bands, from just walked to long ago.
+  // Heat halves every 30 days: 0.5 after a month, 0.25 after two, 0.1 after ~3.3.
+  const HEAT_BANDS = [
+    { min: 0.75, color: '#ff7a3d', fill: 0.5 },
+    { min: 0.5, color: '#f08a52', fill: 0.42 },
+    { min: 0.25, color: '#cf9b78', fill: 0.34 },
+    { min: 0.1, color: '#a8a39a', fill: 0.27 },
+    { min: 0, color: '#8d98ad', fill: 0.2 },
+  ];
+  const heatBand = (h) => HEAT_BANDS.findIndex((b) => h >= b.min);
 
   // ---------- persistence ----------
 
@@ -55,25 +67,38 @@
   const stored = loadJSON(STORAGE_KEY, {});
   /** @type {Map<string, number>} cell -> first visited (ms epoch) */
   const visited = new Map(Object.entries(stored.cells || {}));
-  /** @type {{start:number,end:number,km:number,newCells:number}[]} */
+  /**
+   * points: what the walk earned (heat restored plus bonuses). Walks from
+   * before scores faded have none.
+   * @type {{start:number,end:number,km:number,newCells:number,points?:number}[]}
+   */
   const walks = Array.isArray(stored.walks) ? stored.walks : [];
   /** @type {Map<string, number>} cell -> number of walks through it (older data has none: counts as 1) */
   const visits = new Map(Object.entries(stored.visits || {}));
   const visitCount = (c) => visits.get(c) || (visited.has(c) ? 1 : 0);
+  /** @type {Map<string, number>} cell -> last walked through (ms epoch). Older data starts at the first visit. */
+  const lastSeen = new Map(Object.entries(stored.last || {}));
+  for (const [c, t] of visited) if (!lastSeen.has(c)) lastSeen.set(c, t);
 
   const settings = Object.assign(
-    { res: 9, grid: true, accuracy: 40, basemap: 'osm', activity: 'walk', view: null },
+    { grid: true, accuracy: 40, basemap: 'osm', activity: 'walk', view: null },
     loadJSON(SETTINGS_KEY, {})
   );
+  delete settings.res; // hex sizes were removed: everything is street-sized now
 
   let saveTimer = null;
   function scheduleSave() {
     clearTimeout(saveTimer);
     saveTimer = setTimeout(saveNow, 1500);
   }
+  function snapshot() {
+    return {
+      cells: Object.fromEntries(visited), visits: Object.fromEntries(visits), last: Object.fromEntries(lastSeen), walks,
+    };
+  }
   function saveNow() {
     clearTimeout(saveTimer);
-    saveJSON(STORAGE_KEY, { version: 1, cells: Object.fromEntries(visited), visits: Object.fromEntries(visits), walks });
+    saveJSON(STORAGE_KEY, { version: 1, ...snapshot() });
   }
   function saveSettings() {
     saveJSON(SETTINGS_KEY, settings);
@@ -117,8 +142,17 @@
     return [b];
   }
 
-  function toDisplay(cell) {
-    return settings.res === BASE_RES ? cell : h3.cellToParent(cell, settings.res);
+  /** Heat of an explored hex; hexes on the walk in progress are at full heat. */
+  function cellHeat(c, now = Date.now()) {
+    if (walk && walk.cells.has(c)) return 1;
+    return core.heat(lastSeen.get(c), now);
+  }
+
+  /** Current score of the hexes on this device (check-in points live on the server). */
+  function hexScoreTotal(now = Date.now()) {
+    let total = 0;
+    for (const c of visited.keys()) total += core.hexValue(visitCount(c)) * cellHeat(c, now);
+    return total;
   }
 
   function formatNum(n) {
@@ -129,18 +163,18 @@
 
   // ---------- marking ----------
 
-  // { start, km, newCells:Set, cells:Set, lastCell, lastFix, history, pending,
-  //   moving, fastCount, fastSince, slowSince, slowFixes }
+  // { start, km, newCells:Set, cells:Map<cell, time>, lastCell, lastFix, history, pending,
+  //   moving, fastCount, fastSince, slowSince, slowFixes, origin, armed, replay }
   let walk = null;
 
-  /** Mark base-res cells as visited. Returns how many were new. */
-  function markCells(cells) {
-    const now = Date.now();
+  /** Mark base-res cells as walked through at `time`. Returns how many were new. */
+  function markCells(cells, time = Date.now()) {
     let added = 0;
     for (const c of cells) {
-      if (walk) walk.cells.add(c);
+      if (walk) walk.cells.set(c, Math.max(walk.cells.get(c) || 0, time));
       if (!visited.has(c)) {
-        visited.set(c, now);
+        visited.set(c, time);
+        lastSeen.set(c, time);
         added++;
         if (walk) walk.newCells.add(c);
       }
@@ -256,16 +290,14 @@
   }
 
   function render() {
-    const res = settings.res;
-
-    // Visited cells at the chosen size.
-    const display = new Set();
-    for (const c of visited.keys()) display.add(toDisplay(c));
+    const res = BASE_RES;
+    const now = Date.now();
+    const display = visited;
 
     const walkDisplay = new Set();
     if (walk) {
-      for (const c of walk.newCells) walkDisplay.add(toDisplay(c));
-      for (const p of walk.pending) for (const c of p.cells) if (!visited.has(c)) walkDisplay.add(toDisplay(c));
+      for (const c of walk.newCells) walkDisplay.add(c);
+      for (const p of walk.pending) for (const c of p.cells) if (!visited.has(c)) walkDisplay.add(c);
     }
 
     // Only draw what's near the viewport — keeps big histories fast.
@@ -274,16 +306,19 @@
       const [lat, lng] = h3.cellToLatLng(c);
       return bounds.contains([lat, lng]);
     };
-    const drawVisited = [...display].filter(inView);
+    const bands = HEAT_BANDS.map(() => []);
+    for (const c of visited.keys()) if (inView(c)) bands[heatBand(cellHeat(c, now))].push(c);
     const drawWalk = [...walkDisplay].filter(inView);
 
     visitedLayer.clearLayers();
-    if (drawVisited.length) {
-      L.polygon(h3.cellsToMultiPolygon(drawVisited, false), {
-        pane: 'visited', color: COLORS.visited, weight: 1.5, opacity: 0.9,
-        fillColor: COLORS.visited, fillOpacity: 0.42, interactive: false,
+    bands.forEach((cells, i) => {
+      if (!cells.length) return;
+      const b = HEAT_BANDS[i];
+      L.polygon(h3.cellsToMultiPolygon(cells, false), {
+        pane: 'visited', color: b.color, weight: 1.5, opacity: 0.9,
+        fillColor: b.color, fillOpacity: b.fill, interactive: false,
       }).addTo(visitedLayer);
-    }
+    });
 
     walkLayer.clearLayers();
     if (drawWalk.length) {
@@ -334,6 +369,7 @@
     let km2 = 0;
     for (const c of visited.keys()) km2 += cellAreaCached(c);
     $('statCells').textContent = display.size.toLocaleString();
+    $('statScore').textContent = Math.round(hexScoreTotal(now)).toLocaleString();
     $('statArea').textContent = formatNum(km2);
     $('statView').textContent = viewPct === null ? '–' : (viewPct < 10 && viewPct > 0 ? viewPct.toFixed(1) : Math.round(viewPct)) + '%';
     if (walk) {
@@ -486,7 +522,7 @@
     while (walk.pending.length && walk.pending[0].time <= cutoff) {
       const p = walk.pending.shift();
       walk.km += p.km;
-      markCells(p.cells);
+      markCells(p.cells, p.time);
     }
   }
 
@@ -569,7 +605,7 @@
 
   function updateHereHex() {
     if (!lastPos) return;
-    const cell = h3.latLngToCell(lastPos.latlng.lat, lastPos.latlng.lng, settings.res);
+    const cell = h3.latLngToCell(lastPos.latlng.lat, lastPos.latlng.lng, BASE_RES);
     if (hereHex && hereHex._cell === cell) return;
     if (hereHex) hereLayer.removeLayer(hereHex);
     hereHex = L.polygon(h3.cellToBoundary(cell), {
@@ -603,16 +639,32 @@
 
   // ---------- walk ----------
 
-  function newWalk(start) {
+  function newWalk(start, replay = false) {
     return {
-      start, km: 0, newCells: new Set(), cells: new Set(), lastCell: null, lastFix: null,
+      start, km: 0, newCells: new Set(), cells: new Map(), lastCell: null, lastFix: null,
       history: [], pending: [], moving: false, fastCount: 0, fastSince: 0, slowSince: null, slowFixes: [],
+      origin: null, armed: false, replay,
     };
   }
 
-  /** Count one more visit for every cell the finished walk went through. */
-  function countVisits() {
-    for (const c of walk.cells) visits.set(c, walk.newCells.has(c) ? 1 : visitCount(c) + 1);
+  /**
+   * Finish a walk's hexes: one more visit each, warmed back to full heat.
+   * Returns the points earned. With count = false (re-importing a walk that's
+   * already in) only the last-visit times are brought up to date.
+   */
+  function countVisits(count = true) {
+    let points = 0;
+    for (const [c, t] of walk.cells) {
+      const isNew = walk.newCells.has(c);
+      const prevLast = isNew ? 0 : lastSeen.get(c);
+      if (count) {
+        const before = isNew ? 0 : visitCount(c);
+        points += core.visitGain(before, prevLast, before + 1, t);
+        visits.set(c, before + 1);
+      }
+      if (!prevLast || t > prevLast) lastSeen.set(c, t);
+    }
+    return Math.round(points * 100) / 100;
   }
 
   /** Tell other parts of the app (community sync) that walks were added or data changed. */
@@ -646,9 +698,9 @@
     if (!walk.moving) commitPending();
     document.body.classList.remove('too-fast');
     const summary = { start: walk.start, end: Date.now(), km: +walk.km.toFixed(3), newCells: walk.newCells.size };
-    if (summary.km > 0 || summary.newCells > 0) walks.push(summary);
-    const newDisplay = new Set([...walk.newCells].map(toDisplay)).size;
-    countVisits();
+    summary.points = countVisits();
+    if (summary.km > 0 || summary.newCells > 0 || summary.points > 0) walks.push(summary);
+    const newDisplay = summary.newCells;
     walk = null;
     saveNow();
     emit('changed', { walk: summary });
@@ -660,7 +712,8 @@
       stopNativeWatcher();
       ensureWatching();
     }
-    toast(`Walk saved: ${summary.km.toFixed(2)} km, ${newDisplay} new hex${newDisplay === 1 ? '' : 'es'}`, 4000);
+    toast(`Walk saved: ${summary.km.toFixed(2)} km, ${newDisplay} new hex${newDisplay === 1 ? '' : 'es'}, ` +
+      `+${Math.round(summary.points)} pts`, 4000);
     scheduleRender();
   }
 
@@ -692,7 +745,6 @@
   $('btnClose').addEventListener('click', closeSheet);
   $('sheetBackdrop').addEventListener('click', closeSheet);
 
-  $('selRes').value = String(settings.res);
   $('chkGrid').checked = settings.grid;
   $('selAccuracy').value = String(settings.accuracy);
   $('selBasemap').value = BASEMAPS[settings.basemap] ? settings.basemap : 'osm';
@@ -709,13 +761,6 @@
     setBasemap(settings.basemap);
   });
 
-  $('selRes').addEventListener('change', (e) => {
-    settings.res = Number(e.target.value);
-    saveSettings();
-    hereHex && hereLayer.removeLayer(hereHex);
-    hereHex = null;
-    render();
-  });
   $('chkGrid').addEventListener('change', (e) => {
     settings.grid = e.target.checked;
     saveSettings();
@@ -729,10 +774,7 @@
   // Backup
   $('btnExport').addEventListener('click', async () => {
     saveNow();
-    const data = {
-      app: 'scoop', version: 1, exported: new Date().toISOString(), baseRes: BASE_RES,
-      cells: Object.fromEntries(visited), visits: Object.fromEntries(visits), walks,
-    };
+    const data = { app: 'scoop', version: 1, exported: new Date().toISOString(), baseRes: BASE_RES, ...snapshot() };
     const name = `scoop-backup-${new Date().toISOString().slice(0, 10)}.json`;
     if (isNative) {
       // The Android WebView can't download files, so hand it to the share sheet
@@ -775,6 +817,10 @@
       for (const [c, n] of Object.entries(data.visits || {})) {
         if (visited.has(c) && Number.isInteger(n) && n > visitCount(c)) visits.set(c, n);
       }
+      for (const c of visited.keys()) {
+        const t = Number((data.last || {})[c]) || data.cells[c];
+        if (Number.isFinite(t) && t > (lastSeen.get(c) || 0)) lastSeen.set(c, t);
+      }
       const knownStarts = new Set(walks.map((w) => w.start));
       for (const w of data.walks || []) if (!knownStarts.has(w.start)) walks.push(w);
       walks.sort((a, b) => a.start - b.start);
@@ -790,12 +836,12 @@
 
   /** Replay a recorded track through the same walking-only filter as a live walk. */
   function replayTrack(points) {
-    walk = newWalk(points[0].time);
+    walk = newWalk(points[0].time, true);
     for (const p of points) recordFix(L.latLng(p.lat, p.lng), 0, p.time, null);
     if (!walk.moving) commitPending();
     const result = { start: walk.start, end: points[points.length - 1].time, km: walk.km, newCells: walk.newCells.size };
     // Re-importing the same file shouldn't count as walking there again.
-    if (!walks.some((w) => w.start === result.start)) countVisits();
+    result.points = countVisits(!walks.some((w) => w.start === result.start));
     walk = null;
     document.body.classList.remove('too-fast');
     return result;
@@ -855,6 +901,7 @@
     if (!confirm('Erase every visited hex and walk on this device? This cannot be undone.')) return;
     visited.clear();
     visits.clear();
+    lastSeen.clear();
     walks.length = 0;
     if (walk) { walk.newCells.clear(); walk.pending = []; }
     saveNow();
@@ -896,8 +943,9 @@
 
   // Used by social.js (community features) and handy for debugging from the console.
   window.scoop = {
-    BASE_RES, COLORS, map, visited, visits, visitCount, walks, settings, isNative, Filesystem, Share, App,
-    render, scheduleRender, toDisplay, toast, formatNum, cellAreaCached, haversine, openSheet, closeSheet,
+    BASE_RES, COLORS, map, visited, visits, visitCount, lastSeen, walks, settings, isNative, Filesystem, Share, App,
+    render, scheduleRender, toast, formatNum, cellAreaCached, haversine, openSheet, closeSheet, saveNow, emit,
+    hexScoreTotal,
     position: () => lastPos,
     walking: () => !!walk,
   };

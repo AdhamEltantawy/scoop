@@ -19,6 +19,7 @@
 
   <header class="stats" id="stats">
     <div class="stat"><span class="num" id="statCells">0</span><span class="lbl">hexes</span></div>
+    <div class="stat"><span class="num" id="statScore">0</span><span class="lbl">score</span></div>
     <div class="stat"><span class="num" id="statArea">0</span><span class="lbl">km²</span></div>
     <div class="stat"><span class="num" id="statView">–</span><span class="lbl">of view</span></div>
     <div class="stat walk-only"><span class="num" id="statWalkNew">0</span><span class="lbl">new</span></div>
@@ -59,14 +60,9 @@
   <section class="sheet" id="sheet" aria-label="Menu" hidden>
     <h2>Scoop</h2>
 
-    <label class="row">
-      <span>Hex size</span>
-      <select id="selRes">
-        <option value="8">Large · ~0.7 km² (district)</option>
-        <option value="9">Medium · ~0.1 km² (block)</option>
-        <option value="10">Small · ~0.015 km² (street)</option>
-      </select>
-    </label>
+    <p class="fine heat-legend">Street hexes (~0.015 km²). Explored hexes cool down when you stay away:
+      <span class="swatch hot"></span> just walked → <span class="swatch cold"></span> months ago.
+      Heat halves every 30 days, and so do the points a hex is worth.</p>
 
     <label class="row">
       <span>Map style</span>
@@ -141,8 +137,8 @@
   <script src="vendor/h3-js.umd.js"></script>
   <script src="config.js"></script>
   <script src="vendor/supabase.js"></script>
-  <script src="app.js"></script>
   <script src="social-core.js"></script>
+  <script src="app.js"></script>
   <script src="social.js"></script>
 </body>
 </html>

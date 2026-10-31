@@ -182,7 +182,7 @@
   // ---------- share card ----------
 
   async function shareCard() {
-    const res = S.settings.res;
+    const res = S.BASE_RES;
     const W = 1080;
     const H = 1350;
     const frame = { x: 40, y: 170, w: 1000, h: 880 };
@@ -204,15 +204,12 @@
     ctx.fillText(new Date().toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' }), W - 48, 108);
     ctx.textAlign = 'left';
 
-    // Hexes in the current view, minus anything near a privacy zone. Coarser
-    // display hexes get the zone grown by their size so they can't leak it.
-    const edge = h3.getHexagonEdgeLengthAvg(res, h3.UNITS.m);
-    const hiddenDisplay = core.zoneFilter(zones.map((z) => ({ ...z, r: z.r + edge * 2 })), h3.cellToLatLng, distance);
+    // Hexes in the current view, minus anything in a privacy zone.
     const bounds = map.getBounds();
     const inView = (c) => bounds.contains(h3.cellToLatLng(c));
     const display = new Set();
-    for (const c of S.visited.keys()) if (!isHidden(c)) display.add(S.toDisplay(c));
-    const shown = [...display].filter((c) => inView(c) && !hiddenDisplay(c));
+    for (const c of S.visited.keys()) if (!isHidden(c)) display.add(c);
+    const shown = [...display].filter(inView);
 
     const size = map.getSize();
     const scale = Math.min(frame.w / size.x, frame.h / size.y);
@@ -799,7 +796,7 @@
   function drawFriendOverlay(myDisplay) {
     friendLayer.clearLayers();
     if (!overlay) return;
-    const theirs = new Set([...overlay.cells].map(S.toDisplay));
+    const theirs = overlay.cells;
     const bounds = map.getBounds().pad(0.5);
     const draw = [...theirs].filter((c) => bounds.contains(h3.cellToLatLng(c)));
     if (draw.length) {
@@ -808,7 +805,7 @@
         fillColor: FRIEND_COLOR, fillOpacity: 0.16, interactive: false,
       }).addTo(friendLayer);
     }
-    const mine = new Set([...myDisplay].filter((c) => !isHidden(c)));
+    const mine = new Set([...myDisplay.keys()].filter((c) => !isHidden(c)));
     const cmp = core.compare(mine, theirs);
     $('compareText').replaceChildren(
       h('b', {}, nameOf(overlay.friend)), ` · ${cmp.both.toLocaleString()} shared · `,

@@ -1,4 +1,4 @@
-/* Scoop community: pure helpers shared by social.js and the unit tests
+/* Scoop: pure helpers shared by app.js, social.js and the unit tests
  * (tests/social-core.test.mjs). No DOM, no network.
  */
 (function (root, factory) {
@@ -41,6 +41,63 @@
   /** Bonus for a hex you keep coming back to: 1 at 2 visits, 2 at 4, 3 at 8… */
   function regularBonus(visits) {
     return visits > 1 ? Math.floor(Math.log2(visits)) : 0;
+  }
+
+  // ---------- heat and hex scores ----------
+  // Keep in sync with heat() and hex_value() in the Supabase migration.
+
+  const DAY_MS = 86400000;
+  const HALF_LIFE_DAYS = 30;
+
+  /** How warm a hex is: 1 right after a visit, halving every 30 days. 0 if never visited. */
+  function heat(lastVisit, now = Date.now()) {
+    if (!lastVisit) return 0;
+    return Math.pow(0.5, Math.max(0, now - lastVisit) / (HALF_LIFE_DAYS * DAY_MS));
+  }
+
+  /** What a fully warm hex is worth: 1, plus the regular bonus for repeat visits. */
+  function hexValue(visits) {
+    return visits >= 1 ? 1 + regularBonus(visits) : 0;
+  }
+
+  function hexScore(visits, lastVisit, now = Date.now()) {
+    return hexValue(visits) * heat(lastVisit, now);
+  }
+
+  /**
+   * Points for walking through a hex at `now`: it's back to full value, so you
+   * earn whatever it had cooled off, plus any rise in its regular bonus.
+   */
+  function visitGain(oldVisits, oldLastVisit, newVisits, now) {
+    return Math.max(0, hexValue(newVisits) - hexScore(oldVisits, oldLastVisit, now));
+  }
+
+  // ---------- edge band ----------
+
+  // A GPS fix only unlocks a hex when it's inside the hex shrunk around its
+  // centre to 90% of the area, so wobble along a street doesn't unlock the
+  // hex next door.
+  const CORE_SCALE = Math.sqrt(0.9);
+
+  /** Ray casting on [x, y] points. */
+  function inRing(x, y, ring) {
+    let inside = false;
+    for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+      const [xi, yi] = ring[i];
+      const [xj, yj] = ring[j];
+      if ((yi > y) !== (yj > y) && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) inside = !inside;
+    }
+    return inside;
+  }
+
+  /**
+   * True when [lat, lng] is in the core of the hex with this centre and boundary
+   * (both [lat, lng]). Uses a local flat projection, fine at hex scale.
+   */
+  function inCore(lat, lng, centre, boundary, scale = CORE_SCALE) {
+    const k = Math.cos((centre[0] * Math.PI) / 180);
+    const ring = boundary.map(([la, ln]) => [(ln - centre[1]) * k, la - centre[0]]);
+    return inRing(((lng - centre[1]) * k) / scale, (lat - centre[0]) / scale, ring);
   }
 
   /** Current and longest run of consecutive local days with a walk. */
@@ -125,7 +182,8 @@
   }
 
   return {
-    CHECKIN_KINDS, BADGES, KUDOS,
-    checkinPoints, regularBonus, streaks, compare, zoneFilter, syncDelta, chunk, validUsername, timeAgo, parseInvite,
+    CHECKIN_KINDS, BADGES, KUDOS, DAY_MS, HALF_LIFE_DAYS, CORE_SCALE,
+    checkinPoints, regularBonus, heat, hexValue, hexScore, visitGain, inRing, inCore,
+    streaks, compare, zoneFilter, syncDelta, chunk, validUsername, timeAgo, parseInvite,
   };
 });
