@@ -100,6 +100,98 @@
     return inRing(((lng - centre[1]) * k) / scale, (lat - centre[0]) / scale, ring);
   }
 
+  // ---------- official areas (OpenStreetMap admin boundaries) ----------
+
+  const CITY_TAG = /^(city|town|municipality)$/;
+
+  /**
+   * Pick country, city and district from the admin boundaries containing a
+   * point (Overpass is_in results: [{ id, tags }]). Admin levels mean different
+   * things per country, so:
+   *  - country: admin_level 2
+   *  - city: a level 4–8 boundary tagged as a city/town/municipality (deepest
+   *    first), else level 8, else the deepest of levels 4–7
+   *  - district: the first level below the city, down to level 10
+   * Returns { country, city, district }, each { id: 'r123', name, level } or null.
+   */
+  function pickAreas(relations) {
+    const admin = relations
+      .filter((r) => r.tags && r.tags.boundary === 'administrative' && /^\d+$/.test(r.tags.admin_level || ''))
+      .map((r) => ({ id: 'r' + r.id, name: r.tags['name:en'] || r.tags.name || `#${r.id}`, level: Number(r.tags.admin_level), tags: r.tags }));
+    const pick = (r) => (r ? { id: r.id, name: r.name, level: r.level } : null);
+    const country = admin.find((r) => r.level === 2);
+    const cityish = admin.filter((r) => r.level >= 4 && r.level <= 8).sort((a, b) => b.level - a.level);
+    const city = cityish.find((r) => CITY_TAG.test(r.tags.place || '') || CITY_TAG.test(r.tags.border_type || '')) ||
+      cityish.find((r) => r.level === 8) || cityish[0];
+    const floor = city ? city.level : 2;
+    const district = admin.filter((r) => r.level > floor && r.level <= 10).sort((a, b) => a.level - b.level)[0];
+    return { country: pick(country), city: pick(city), district: pick(district) };
+  }
+
+  /** Douglas–Peucker on [lat, lng] points; keeps both ends. tol in degrees. */
+  function simplifyLine(points, tol) {
+    if (points.length <= 2) return points.slice();
+    const keep = new Uint8Array(points.length);
+    keep[0] = keep[points.length - 1] = 1;
+    const stack = [[0, points.length - 1]];
+    while (stack.length) {
+      const [a, b] = stack.pop();
+      const [ay, ax] = points[a];
+      const [by, bx] = points[b];
+      const dx = bx - ax;
+      const dy = by - ay;
+      const len2 = dx * dx + dy * dy;
+      let worst = -1;
+      let at = -1;
+      for (let i = a + 1; i < b; i++) {
+        const [py, px] = points[i];
+        let d;
+        if (len2 === 0) d = (px - ax) ** 2 + (py - ay) ** 2;
+        else {
+          const t = Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / len2));
+          d = (px - ax - t * dx) ** 2 + (py - ay - t * dy) ** 2;
+        }
+        if (d > worst) { worst = d; at = i; }
+      }
+      if (worst > tol * tol) {
+        keep[at] = 1;
+        stack.push([a, at], [at, b]);
+      }
+    }
+    return points.filter((_, i) => keep[i]);
+  }
+
+  /**
+   * Point in a boundary given as its member ways ([[lat, lng], …] each), in any
+   * order. Even–odd crossings over all segments, so the ways don't need to be
+   * stitched into rings, and holes and exclaves just work.
+   */
+  function inWays(lat, lng, ways) {
+    let inside = false;
+    for (const w of ways) {
+      for (let i = 1; i < w.length; i++) {
+        const [yi, xi] = w[i];
+        const [yj, xj] = w[i - 1];
+        if ((yi > lat) !== (yj > lat) && lng < ((xj - xi) * (lat - yi)) / (yj - yi) + xi) inside = !inside;
+      }
+    }
+    return inside;
+  }
+
+  /** [south, west, north, east] around a boundary's ways. */
+  function waysBox(ways) {
+    const box = [Infinity, Infinity, -Infinity, -Infinity];
+    for (const w of ways) {
+      for (const [lat, lng] of w) {
+        if (lat < box[0]) box[0] = lat;
+        if (lng < box[1]) box[1] = lng;
+        if (lat > box[2]) box[2] = lat;
+        if (lng > box[3]) box[3] = lng;
+      }
+    }
+    return box;
+  }
+
   /** Current and longest run of consecutive local days with a walk. */
   function streaks(walkStarts, now = Date.now()) {
     const dayOf = (ms) => {
@@ -184,6 +276,7 @@
   return {
     CHECKIN_KINDS, BADGES, KUDOS, DAY_MS, HALF_LIFE_DAYS, CORE_SCALE,
     checkinPoints, regularBonus, heat, hexValue, hexScore, visitGain, inRing, inCore,
+    pickAreas, simplifyLine, inWays, waysBox,
     streaks, compare, zoneFilter, syncDelta, chunk, validUsername, timeAgo, parseInvite,
   };
 });

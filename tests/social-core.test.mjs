@@ -105,3 +105,38 @@ test('edge band: only the inner 90% of a hex unlocks it', () => {
   }
   assert.ok(Math.abs(inside / total - 0.9) < 0.02, `core share ${inside / total}`);
 });
+
+const rel = (id, level, extra = {}) => ({ id, tags: { boundary: 'administrative', admin_level: String(level), name: `L${level}`, ...extra } });
+
+test('areas: city is the tagged city, district the next level down', () => {
+  // Berlin-like: state that is a city, boroughs at 9, localities at 10.
+  const berlin = core.pickAreas([rel(1, 2), rel(2, 4, { place: 'city' }), rel(3, 9), rel(4, 10)]);
+  assert.deepEqual([berlin.country.id, berlin.city.id, berlin.district.id], ['r1', 'r2', 'r3']);
+  // No city tags: level 8 is the city.
+  const plain = core.pickAreas([rel(1, 2), rel(5, 4), rel(6, 6), rel(7, 8), rel(8, 10)]);
+  assert.deepEqual([plain.city.id, plain.district.id], ['r7', 'r8']);
+  // No level 8: the deepest of 4–7.
+  const shallow = core.pickAreas([rel(1, 2), rel(5, 4), rel(6, 6), rel(9, 7)]);
+  assert.deepEqual([shallow.city.id, shallow.district], ['r9', null]);
+  // Not administrative, or no levels at all.
+  assert.deepEqual(core.pickAreas([{ id: 3, tags: { boundary: 'postal_code', admin_level: '8' } }]),
+    { country: null, city: null, district: null });
+  assert.equal(core.pickAreas([rel(1, 2, { 'name:en': 'Egypt', name: 'مصر' })]).country.name, 'Egypt');
+});
+
+test('areas: point in a boundary made of unordered ways, with a hole', () => {
+  // A 2×2 square split into two ways in reverse order, with a small square hole.
+  const outer = [[[0, 0], [0, 2], [2, 2]], [[0, 0], [2, 0], [2, 2]]];
+  const hole = [[[0.9, 0.9], [0.9, 1.1], [1.1, 1.1], [1.1, 0.9], [0.9, 0.9]]];
+  const ways = [...outer, ...hole];
+  assert.equal(core.inWays(0.5, 0.5, ways), true);
+  assert.equal(core.inWays(1, 1, ways), false, 'in the hole');
+  assert.equal(core.inWays(3, 1, ways), false, 'outside');
+  assert.deepEqual(core.waysBox(ways), [0, 0, 2, 2]);
+});
+
+test('areas: simplify drops points within tolerance and keeps the ends', () => {
+  const line = [[0, 0], [0.00001, 1], [0, 2], [1, 3], [0, 4]];
+  assert.deepEqual(core.simplifyLine(line, 0.001), [[0, 0], [0, 2], [1, 3], [0, 4]]);
+  assert.deepEqual(core.simplifyLine([[0, 0], [1, 1]], 1), [[0, 0], [1, 1]]);
+});
