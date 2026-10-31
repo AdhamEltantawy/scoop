@@ -44,11 +44,26 @@ test('privacy zones hide cells near home', () => {
   assert.equal(core.zoneFilter([], h3.cellToLatLng, dist)(near), false);
 });
 
-test('sync delta sends new and revisited cells only', () => {
-  const visited = new Map([['a', 1], ['b', 2], ['c', 3], ['home', 4]]);
-  const counts = { a: 1, b: 3, c: 1, home: 1 };
-  const delta = core.syncDelta(visited, (c) => counts[c], { a: 1, b: 2 }, (c) => c === 'home');
-  assert.deepEqual(delta, [{ c: 'b', t: 2, v: 3 }, { c: 'c', t: 3, v: 1 }]);
+test('sync delta sends new, revisited and newly tagged cells only', () => {
+  const visited = new Map([['a', 1], ['b', 2], ['c', 3], ['d', 4], ['home', 5]]);
+  const counts = { a: 1, b: 3, c: 1, d: 1, home: 1 };
+  const last = new Map([['a', 1], ['b', 20], ['c', 3], ['d', 4]]);
+  const areas = { d: { country: 'r1', city: null, district: 'r9' } };
+  const synced = { a: '1|1|', b: '2|2|', d: '1|4|' };
+  const delta = core.syncDelta(visited, (c) => counts[c], last, (c) => areas[c] || null, synced, (c) => c === 'home');
+  assert.deepEqual(delta, [
+    { c: 'b', t: 2, l: 20, v: 3 },
+    { c: 'c', t: 3, l: 3, v: 1 },
+    { c: 'd', t: 4, l: 4, v: 1, a: ['r1', '', 'r9'] },
+  ]);
+  assert.equal(core.cellSig(delta[2]), '1|4|r1,,r9');
+});
+
+test('top percent counts from the middle of your place', () => {
+  assert.equal(core.topPercent(6, 500), 1.1);
+  assert.equal(core.topPercent(3, 4), 62.5);
+  assert.equal(core.topPercent(1, 1), 50);
+  assert.equal(core.topPercent(1, 0), 100);
 });
 
 test('chunk, usernames and invites', () => {

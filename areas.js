@@ -25,18 +25,19 @@
   /**
    * areas: id -> { name, level, kind: 'country' | 'city' | 'district' }
    * combos: ['country|city|district', …]; cells and coarse map to an index.
-   * shapes: [{ id, combo, box, ways }]
+   * shapes: [{ id, combo, box, ways }]; noShape: ids whose outline couldn't be used
    */
+  const empty = () => ({ v: 1, areas: {}, combos: [], cells: {}, coarse: {}, shapes: [], noShape: {} });
   let db = load();
 
   function load() {
     try {
       const d = JSON.parse(localStorage.getItem(KEY));
-      if (d && d.v === 1) return d;
+      if (d && d.v === 1) return Object.assign(empty(), d);
     } catch (e) {
       // start over
     }
-    return { v: 1, areas: {}, combos: [], cells: {}, coarse: {}, shapes: [] };
+    return empty();
   }
 
   let saveTimer = null;
@@ -111,28 +112,33 @@
       if (a) db.areas[a.id] = { name: a.name, level: a.level, kind };
     }
     const combo = comboIndex([picked.country, picked.city, picked.district].map((a) => (a ? a.id : '')).join('|'));
+    // The point lookup is authoritative for this hex, even if a simplified
+    // outline we already have says otherwise (right on a border).
+    db.cells[cell] = combo;
     const smallest = picked.district || picked.city;
-    if (smallest) {
-      await sleep(REQUEST_GAP_MS);
-      try {
-        const geo = await overpass(`[out:json][timeout:60];rel(${smallest.id.slice(1)});out geom;`);
-        const rel = (geo.elements || [])[0];
-        const ways = ((rel && rel.members) || [])
-          .filter((m) => m.type === 'way' && Array.isArray(m.geometry))
-          .map((m) => core.simplifyLine(m.geometry.map((p) => [+p.lat.toFixed(5), +p.lon.toFixed(5)]), SIMPLIFY_DEG));
-        if (ways.length) {
-          db.shapes.push({ id: smallest.id, combo, box: core.waysBox(ways), ways });
-          if (lookupLocal(cell)) return;
-        }
-      } catch (e) {
-        // Outline too big or the server is busy: fall back to caching nearby.
-      }
-      db.coarse[h3.cellToParent(cell, 8)] = combo;
-      db.cells[cell] = combo;
+    if (!smallest) {
+      db.coarse[h3.cellToParent(cell, COARSE_RES)] = combo;
       return;
     }
-    db.coarse[h3.cellToParent(cell, COARSE_RES)] = combo;
-    db.cells[cell] = combo;
+    if (db.shapes.some((s) => s.id === smallest.id)) return;
+    if (db.noShape[smallest.id]) {
+      db.coarse[h3.cellToParent(cell, 8)] = combo;
+      return;
+    }
+    await sleep(REQUEST_GAP_MS);
+    try {
+      const geo = await overpass(`[out:json][timeout:60];rel(${smallest.id.slice(1)});out geom;`);
+      const rel = (geo.elements || [])[0];
+      const ways = ((rel && rel.members) || [])
+        .filter((m) => m.type === 'way' && Array.isArray(m.geometry))
+        .map((m) => core.simplifyLine(m.geometry.map((p) => [+p.lat.toFixed(5), +p.lon.toFixed(5)]), SIMPLIFY_DEG));
+      if (!ways.length) throw new Error('no outline');
+      db.shapes.push({ id: smallest.id, combo, box: core.waysBox(ways), ways });
+    } catch (e) {
+      // Outline too big or missing: tag nearby hexes (~0.7 km²) from this lookup instead.
+      if (e.message === 'no outline') db.noShape[smallest.id] = true;
+      db.coarse[h3.cellToParent(cell, 8)] = combo;
+    }
   }
 
   let running = null;
@@ -171,7 +177,7 @@
   }
 
   function clear() {
-    db = { v: 1, areas: {}, combos: [], cells: {}, coarse: {}, shapes: [] };
+    db = empty();
     save();
   }
 

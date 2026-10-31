@@ -284,3 +284,11 @@ body.comparing .toast { top: calc(118px + var(--safe-top)); }
   background: rgba(255, 255, 255, 0.85); border: 2px solid #4cc9f0; border-radius: 50%; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
 }
 .checkin-bubble.mine { border-color: var(--accent); }
+
+.person small, .ranks .who small { display: block; color: var(--muted); font-size: 12px; font-weight: 400; }
+.person.friend { align-items: flex-start; }
+.fine-inline { color: var(--muted); }
+.chip.renew { margin-top: 6px; background: var(--accent-2); color: #1d2433; font-weight: 600; }
+.standing { font-weight: 600; color: var(--accent-2); }
+.ranks .friend .who { color: #4cc9f0; }
+.ranks .gap { justify-content: center; color: var(--muted); padding: 2px 0; }

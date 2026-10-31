@@ -231,18 +231,32 @@
     };
   }
 
+  /** What was uploaded for a cell, to spot changes. */
+  function cellSig(x) {
+    return `${x.v}|${x.l}|${x.a ? x.a.join(',') : ''}`;
+  }
+
   /**
-   * Cells that changed since the last sync, in the shape sync_cells() takes.
-   * synced: { cell: visitsAlreadyUploaded }.
+   * Cells that changed since the last sync, in the shape sync_cells() takes:
+   * { c, t: first visit, l: last visit, v: visits, a: [country, city, district] | undefined }.
+   * synced: { cell: cellSig of what was uploaded }. areaOf(cell) returns the
+   * area ids or null when not looked up yet.
    */
-  function syncDelta(visited, visitCount, synced, isHidden) {
+  function syncDelta(visited, visitCount, lastSeen, areaOf, synced, isHidden) {
     const out = [];
     for (const [c, t] of visited) {
       if (isHidden(c)) continue;
-      const v = visitCount(c);
-      if (synced[c] !== v) out.push({ c, t, v });
+      const a = areaOf(c);
+      const x = { c, t, l: lastSeen.get(c) || t, v: visitCount(c) };
+      if (a) x.a = [a.country || '', a.city || '', a.district || ''];
+      if (synced[c] !== cellSig(x)) out.push(x);
     }
     return out;
+  }
+
+  /** Top x% from a rank among n people, counting from the middle of your place. */
+  function topPercent(rank, total) {
+    return total > 0 ? Math.round(((rank - 0.5) / total) * 1000) / 10 : 100;
   }
 
   function chunk(list, size) {
@@ -277,6 +291,6 @@
     CHECKIN_KINDS, BADGES, KUDOS, DAY_MS, HALF_LIFE_DAYS, CORE_SCALE,
     checkinPoints, regularBonus, heat, hexValue, hexScore, visitGain, inRing, inCore,
     pickAreas, simplifyLine, inWays, waysBox,
-    streaks, compare, zoneFilter, syncDelta, chunk, validUsername, timeAgo, parseInvite,
+    streaks, compare, zoneFilter, cellSig, syncDelta, topPercent, chunk, validUsername, timeAgo, parseInvite,
   };
 });

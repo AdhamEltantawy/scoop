@@ -11,6 +11,7 @@
 
   const S = window.scoop;
   const core = window.ScoopCore;
+  const Areas = window.scoopAreas;
   if (!S || !core || !window.h3) return;
 
   const { map, toast } = S;
@@ -29,7 +30,8 @@
   const SYNC_KEY = 'scoop.sync.v1';
   const INVITE_KEY = 'scoop.invite';
   const TAB_KEY = 'scoop.tab';
-  const PROFILE_COLS = 'id, username, display_name, home_city, leaderboard_public';
+  const PROFILE_COLS = 'id, username, display_name';
+  const AREA_WAIT_MS = 3 * 86400000;
   const PHOTO_BUCKET = 'checkin-photos';
   const FRIEND_COLOR = '#4cc9f0';
   const COMMUNITY_COLOR = '#9b5de5';
@@ -51,7 +53,7 @@
       else if (k in el && typeof v !== 'string') el[k] = v;
       else el.setAttribute(k, v === true ? '' : v);
     }
-    for (const kid of kids.flat()) {
+    for (const kid of kids.flat(Infinity)) {
       if (kid === null || kid === undefined || kid === false) continue;
       el.append(kid instanceof Node ? kid : String(kid));
     }
@@ -60,7 +62,7 @@
 
   /** Replace an element's children, skipping null/false (replaceChildren would print them). */
   function fill(el, ...kids) {
-    el.replaceChildren(...kids.flat().filter((k) => k !== null && k !== undefined && k !== false));
+    el.replaceChildren(...kids.flat(Infinity).filter((k) => k !== null && k !== undefined && k !== false));
   }
 
   function loadJSON(key, fallback) {
@@ -331,12 +333,25 @@
     syncing = true;
     try {
       if (syncState.uid !== uid()) syncState = { uid: uid(), cells: {}, walks: [] };
-      const delta = core.syncDelta(S.visited, S.visitCount, syncState.cells, isHidden);
+      const areaOf = Areas ? Areas.of : () => null;
+      let delta = core.syncDelta(S.visited, S.visitCount, S.lastSeen, areaOf, syncState.cells, isHidden);
+      let untagged = 0;
+      if (Areas && delta.some((x) => !x.a)) {
+        // Tag hexes with their official areas first, so points land in the right ones.
+        untagged = await Areas.resolve(delta.filter((x) => !x.a).map((x) => x.c));
+        delta = core.syncDelta(S.visited, S.visitCount, S.lastSeen, areaOf, syncState.cells, isHidden);
+        // Recent hexes wait for their areas; after a few days they go up without.
+        const cutoff = Date.now() - AREA_WAIT_MS;
+        delta = delta.filter((x) => x.a || x.l < cutoff);
+      }
       for (const batch of core.chunk(delta, 1000)) {
-        check(await sb.rpc('sync_cells', { cells: batch }));
-        for (const x of batch) syncState.cells[x.c] = x.v;
+        const ids = new Set(batch.flatMap((x) => x.a || []).filter(Boolean));
+        const areas = [...ids].map((id) => ({ id, ...Areas.info(id) })).filter((a) => a.kind);
+        check(await sb.rpc('sync_cells', { cells: batch, areas }));
+        for (const x of batch) syncState.cells[x.c] = core.cellSig(x);
         saveSync();
       }
+      if (untagged) scheduleSync(60000);
       const known = new Set(syncState.walks);
       const fresh = S.walks.filter((w) => !known.has(w.start) && w.end >= w.start);
       for (const batch of core.chunk(fresh, 200)) {
@@ -500,8 +515,9 @@
     h('label', { class: 'field' }, h('span', {}, 'Email'), email),
     codeRow,
     button,
-    h('p', { class: 'fine' }, 'Only hex ids, visit counts and walk totals are uploaded — never your GPS tracks. ' +
-      'Friends see your map; nobody else does unless you make your profile public. Hexes inside your privacy zones are never uploaded.'));
+    h('p', { class: 'fine' }, 'Only hex ids, visit counts, visit times and walk totals are uploaded — never your GPS tracks. ' +
+      'Friends see your map and scores. Everyone else only sees an anonymous rank on area leaderboards. ' +
+      'Hexes inside your privacy zones are never uploaded.'));
     setBody(form);
   }
 
@@ -509,8 +525,6 @@
     return {
       username: h('input', { value: p.username || '', placeholder: 'walker_42', autocapitalize: 'none', maxlength: '20', required: true }),
       display_name: h('input', { value: p.display_name || '', placeholder: 'Your name', maxlength: '40' }),
-      home_city: h('input', { value: p.home_city || '', placeholder: 'City', maxlength: '60' }),
-      leaderboard_public: h('input', { type: 'checkbox', checked: !!p.leaderboard_public }),
     };
   }
 
@@ -520,8 +534,6 @@
     return {
       username,
       display_name: f.display_name.value.trim() || null,
-      home_city: f.home_city.value.trim() || null,
-      leaderboard_public: f.leaderboard_public.checked,
     };
   }
 
@@ -533,10 +545,6 @@
     return [
       h('label', { class: 'field' }, h('span', {}, 'Username'), f.username),
       h('label', { class: 'field' }, h('span', {}, 'Display name'), f.display_name),
-      h('label', { class: 'field' }, h('span', {}, 'Home city'), f.home_city),
-      h('label', { class: 'row' },
-        h('span', {}, 'Public profile', h('small', {}, 'Show me on public leaderboards and the community map')),
-        f.leaderboard_public),
     ];
   }
 
@@ -667,31 +675,89 @@
 
   // ---------- friends, map overlay and compare ----------
 
+  const DAY = 86400000;
+  const RENEW_WINDOW_MS = 7 * DAY;  // keep in sync with renew_friendship()
+  const LAPSE_GRACE_MS = 30 * DAY;
+
+  /**
+   * Friendship rows with the other person's profile. state: 'pending',
+   * 'active', 'renew' (last 7 days), 'lapsed' (renewable for 30 days) or
+   * 'gone' (lapsed too long ago).
+   */
   async function loadFriends() {
-    const rows = check(await sb.from('friendships').select('requester, addressee, status, created_at'));
+    const rows = check(await sb.from('friendships')
+      .select('requester, addressee, status, created_at, expires_at, requester_renewed, addressee_renewed'));
     const ids = rows.map((r) => (r.requester === uid() ? r.addressee : r.requester));
     const profiles = ids.length
       ? check(await sb.from('profiles').select(PROFILE_COLS).in('id', ids))
       : [];
     const byId = Object.fromEntries(profiles.map((p) => [p.id, p]));
+    const now = Date.now();
     return rows.map((r) => {
-      const otherId = r.requester === uid() ? r.addressee : r.requester;
-      return { ...r, other: byId[otherId] || { id: otherId, username: '?' }, incoming: r.addressee === uid() };
+      const mine = r.requester === uid();
+      const otherId = mine ? r.addressee : r.requester;
+      const expires = r.expires_at ? Date.parse(r.expires_at) : null;
+      let state = 'pending';
+      if (r.status === 'accepted') {
+        if (expires > now + RENEW_WINDOW_MS) state = 'active';
+        else if (expires > now) state = 'renew';
+        else if (expires > now - LAPSE_GRACE_MS) state = 'lapsed';
+        else state = 'gone';
+      }
+      return {
+        ...r, state, expires,
+        other: byId[otherId] || { id: otherId, username: '?' },
+        incoming: r.addressee === uid(),
+        iRenewed: mine ? r.requester_renewed : r.addressee_renewed,
+        theyRenewed: mine ? r.addressee_renewed : r.requester_renewed,
+      };
     });
   }
 
+  const isFriend = (r) => r.state === 'active' || r.state === 'renew';
+  const daysLeft = (ms) => Math.max(0, Math.ceil((ms - Date.now()) / DAY));
+  const fmtPts = (n) => Math.round(Number(n) || 0).toLocaleString();
+
+  async function renewFriend(r) {
+    try {
+      const [res] = check(await sb.rpc('renew_friendship', { other: r.other.id }));
+      toast(res.renewed ? `Renewed — friends with ${nameOf(r.other)} for another month`
+        : `Renewed on your side — waiting for ${nameOf(r.other)}`, 4000);
+      renderCommunity();
+    } catch (err) {
+      fail(err);
+    }
+  }
+
+  function renewal(r) {
+    if (r.state === 'active') {
+      return h('small', { class: 'fine-inline' }, `renews in the last week · ${daysLeft(r.expires)} d left`);
+    }
+    if (r.iRenewed) return h('small', { class: 'fine-inline' }, `you renewed · waiting for them`);
+    return h('button', { class: 'chip renew', onclick: () => renewFriend(r) },
+      r.theyRenewed ? 'Renew — they did' : r.state === 'lapsed' ? 'Renew' : `Renew · ${daysLeft(r.expires)} d left`);
+  }
+
   async function renderFriends(panel) {
-    const [rows, code] = await Promise.all([loadFriends(), sb.rpc('my_invite_code').then(check)]);
-    const friends = rows.filter((r) => r.status === 'accepted');
-    const incoming = rows.filter((r) => r.status === 'pending' && r.incoming);
-    const outgoing = rows.filter((r) => r.status === 'pending' && !r.incoming);
+    const [rows, code, stats] = await Promise.all([
+      loadFriends(), sb.rpc('my_invite_code').then(check), sb.rpc('friend_stats').then(check),
+    ]);
+    const statsById = Object.fromEntries(stats.map((x) => [x.user_id, x]));
+    const friends = rows.filter(isFriend).sort((a, b) => a.expires - b.expires);
+    const lapsed = rows.filter((r) => r.state === 'lapsed');
+    const incoming = rows.filter((r) => r.state === 'pending' && r.incoming);
+    const outgoing = rows.filter((r) => r.state === 'pending' && !r.incoming);
     const codeInput = h('input', { placeholder: 'Friend\'s invite code or link', autocapitalize: 'characters' });
 
     const friendRow = (r) => {
       const p = r.other;
+      const st = statsById[p.id];
       const showing = overlay && overlay.friend.id === p.id;
-      return h('li', { class: 'person' },
-        h('span', {}, h('b', {}, nameOf(p)), p.home_city ? h('small', {}, ` ${p.home_city}`) : ''),
+      return h('li', { class: 'person friend' },
+        h('span', {}, h('b', {}, nameOf(p)),
+          st ? h('small', {}, `${fmtPts(st.score)} pts · ${fmtPts(st.week)} this week` +
+            (st.district_name ? ` · ${st.district_name} #${st.district_rank} of ${st.district_total}` : '')) : null,
+          renewal(r)),
         h('button', {
           class: 'chip', 'aria-pressed': String(showing),
           onclick: () => (showing ? clearFriendOverlay() : showFriendOverlay(p)).then(() => renderCommunity()).catch(fail),
@@ -720,7 +786,8 @@
       }
     };
 
-    fill(panel, 
+    const me = statsById[uid()];
+    fill(panel,
       h('div', { class: 'invite' },
         h('div', {}, h('small', {}, 'Your invite code'), h('div', { class: 'code' }, code)),
         h('button', {
@@ -736,7 +803,10 @@
           if (!c) return toast('That doesn\'t look like an invite code');
           try {
             const [p] = check(await sb.rpc('send_friend_request', { code: c }));
-            toast(p.status === 'accepted' ? `You're now friends with ${nameOf(p)}` : `Request sent to ${nameOf(p)}`);
+            toast({
+              accepted: `You're friends with ${nameOf(p)}`,
+              renewing: `Renewed on your side — waiting for ${nameOf(p)}`,
+            }[p.status] || `Request sent to ${nameOf(p)}`);
             renderCommunity();
           } catch (err) {
             fail(err);
@@ -753,9 +823,16 @@
         ? h('ul', { class: 'list' }, friends.map(friendRow))
         : h('p', { class: 'fine' }, 'No friends yet — share your invite code.'),
       outgoing.length ? h('p', { class: 'fine' }, `Waiting on: ${outgoing.map((r) => nameOf(r.other)).join(', ')}`) : null,
+      lapsed.length ? h('h3', {}, 'Lapsed') : null,
+      lapsed.length ? h('ul', { class: 'list' }, lapsed.map((r) => h('li', { class: 'person' },
+        h('span', {}, h('b', {}, nameOf(r.other)),
+          h('small', {}, `You can renew for ${daysLeft(r.expires + LAPSE_GRACE_MS)} more days`)),
+        renewal(r)))) : null,
+      h('p', { class: 'fine' }, 'Friendships last a month. In the last week you both tap Renew to keep going — it only renews once you both have. ' +
+        'Friends see your map, walks, check-ins, scores and home district' + (me && me.district_name ? ` (${me.district_name})` : '') + '.'),
       h('h3', {}, 'Map layers'),
       h('label', { class: 'row' },
-        h('span', {}, 'Community map', h('small', {}, 'Blocks explored by you, friends and public profiles. Tap a block to see who got there first.')),
+        h('span', {}, 'Community map', h('small', {}, 'Street hexes explored by you and your friends. Tap one to see who got there first.')),
         h('input', {
           type: 'checkbox', checked: communityOn,
           onchange: (e) => { communityOn = e.target.checked; drawCommunity(); },
@@ -821,7 +898,7 @@
   const communityLayer = L.layerGroup([], { pane: 'community' }).addTo(map);
   let communityOn = false;
   let communityKey = '';
-  /** @type {Map<string, {explorers:number, first_username:string, first_visited:string}>} */
+  /** @type {Map<string, {explorers:number, first_username:string}>} */
   let communityCells = new Map();
   let communityTimer = null;
 
@@ -833,8 +910,9 @@
       return;
     }
     communityTimer = setTimeout(async () => {
-      if (map.getZoom() < 12) {
+      if (map.getZoom() < 14) {
         communityLayer.clearLayers();
+        communityKey = '';
         return;
       }
       const b = map.getBounds().pad(0.2);
@@ -847,7 +925,7 @@
       } catch (e) {
         return;
       }
-      if (!cells8.length || cells8.length > 400) return;
+      if (!cells8.length || cells8.length > 60) return;
       const key = cells8.sort().join();
       if (key === communityKey) return;
       communityKey = key;
@@ -870,11 +948,11 @@
 
   map.on('click', (e) => {
     if (!communityOn) return;
-    const r = communityCells.get(h3.latLngToCell(e.latlng.lat, e.latlng.lng, 9));
+    const r = communityCells.get(h3.latLngToCell(e.latlng.lat, e.latlng.lng, S.BASE_RES));
     if (!r) return;
     L.popup().setLatLng(e.latlng).setContent(h('div', {},
       h('b', {}, `${r.explorers} explorer${r.explorers === 1 ? '' : 's'}`), h('br'),
-      `First here: ${r.first_username} (${new Date(r.first_visited).toLocaleDateString()})`)).openOn(map);
+      `First here: ${r.first_username}`)).openOn(map);
   });
 
   document.addEventListener('scoop:render', (e) => {
@@ -884,47 +962,64 @@
 
   // ---------- leaderboards ----------
 
-  const rankPrefs = loadJSON('scoop.ranks', { scope: 'friends', period: 'week', metric: 'score' });
+  const rankPrefs = Object.assign({ scope: 'friends', period: 'now' }, loadJSON('scoop.ranks.v2', {}));
+  const PERIODS = [['now', 'Now'], ['week', 'This week'], ['month', 'This month']];
+  const KIND_LABEL = { district: 'District', city: 'City', country: 'Country' };
+
+  function scoreNote() {
+    return h('p', { class: 'fine' },
+      'Score: each street hex is worth 1 point, plus a bonus for hexes you keep coming back to (+1 at 2 visits, +2 at 4, +3 at 8…). ' +
+      'Hexes cool down when you stay away: their points halve every 30 days, and walking through again brings them back. ' +
+      'Check-ins add points that fade the same way — photo 3, coffee or food 2, meeting a friend 5. ' +
+      '"This week" and "This month" count the points you earned in that time.');
+  }
 
   async function renderRanks(panel) {
+    const homes = check(await sb.rpc('my_areas', { period: rankPrefs.period }));
+    const scopes = [['friends', 'Friends'], ...homes.map((a) => [a.kind, `${KIND_LABEL[a.kind]}: ${a.name || '?'}`])];
+    if (!scopes.some(([v]) => v === rankPrefs.scope)) rankPrefs.scope = 'friends';
     const select = (key, options) => h('select', {
       'aria-label': key,
-      onchange: (e) => { rankPrefs[key] = e.target.value; saveJSON('scoop.ranks', rankPrefs); renderCommunity(); },
+      onchange: (e) => { rankPrefs[key] = e.target.value; saveJSON('scoop.ranks.v2', rankPrefs); renderCommunity(); },
     }, options.map(([v, label]) => h('option', { value: v, selected: rankPrefs[key] === v }, label)));
-    const rows = check(await sb.rpc('leaderboard', rankPrefs));
-    const unit = { score: 'pts', hexes: 'hexes', km: 'km' }[rankPrefs.metric];
-    fill(panel, 
-      h('div', { class: 'filters' },
-        select('scope', [['friends', 'Friends'], ['public', 'Everyone']]),
-        select('period', [['week', 'This week'], ['all', 'All time']]),
-        select('metric', [['score', 'Score'], ['hexes', 'Hexes'], ['km', 'Distance']])),
-      rows.length
-        ? h('ol', { class: 'list ranks' }, rows.map((r) => h('li', { class: r.user_id === uid() ? 'me' : '' },
+    const filters = h('div', { class: 'filters' }, select('scope', scopes), select('period', PERIODS));
+    const value = (v) => `${Number(v).toLocaleString(undefined, { maximumFractionDigits: 1 })} pts`;
+
+    if (rankPrefs.scope === 'friends') {
+      const rows = check(await sb.rpc('leaderboard', { period: rankPrefs.period }));
+      fill(panel, filters,
+        h('ol', { class: 'list ranks' }, rows.map((r) => h('li', { class: r.user_id === uid() ? 'me' : '' },
           h('span', { class: 'rank' }, String(r.rank)),
           h('span', { class: 'who' }, nameOf(r)),
-          h('span', { class: 'val' }, `${Number(r.value).toLocaleString()} ${unit}`))))
-        : h('p', { class: 'fine' }, rankPrefs.scope === 'public'
-          ? 'No public profiles yet. Turn on "Public profile" in the Me tab to appear here.'
-          : 'No one here yet.'),
-      h('p', { class: 'fine' },
-        'Score: 1 point per new street hex, bonus points for hexes you keep returning to (all-time only), ' +
-        'plus check-ins — photo 3, coffee or food 2, meeting a friend 5.'),
-    );
+          h('span', { class: 'val' }, value(r.value))))),
+        rows.length < 2 ? h('p', { class: 'fine' }, 'Add friends in the Friends tab to compete with them.') : null,
+        scoreNote());
+      return;
+    }
+
+    const home = homes.find((a) => a.kind === rankPrefs.scope);
+    const rows = check(await sb.rpc('area_leaderboard', { area: home.id, period: rankPrefs.period }));
+    const mine = rows.find((r) => r.is_me);
+    const total = rows.length ? rows[0].total : 0;
+    fill(panel, filters,
+      mine
+        ? h('p', { class: 'standing' }, `You're #${mine.rank} of ${Number(total).toLocaleString()} in ${home.name} · top ${core.topPercent(mine.rank, total)}%`)
+        : h('p', { class: 'fine' }, `No points in ${home.name} for this period yet.`),
+      h('ol', { class: 'list ranks' }, rows.map((r, i) => [
+        i > 0 && r.rank > rows[i - 1].rank + 1 ? h('li', { class: 'gap' }, '…') : null,
+        h('li', { class: r.is_me ? 'me' : r.is_friend ? 'friend' : '' },
+          h('span', { class: 'rank' }, String(r.rank)),
+          h('span', { class: 'who' }, r.username ? nameOf(r) : 'Explorer'),
+          h('span', { class: 'val' }, value(r.value))),
+      ])),
+      h('p', { class: 'fine' }, `Everyone with explored hexes in ${home.name}. Only you and your friends are named. ` +
+        'Your district, city and country are where you score the most.'),
+      scoreNote());
   }
 
   // ---------- challenges ----------
 
-  map.createPane('challenge').style.zIndex = '403';
-  const challengeLayer = L.layerGroup([], { pane: 'challenge' }).addTo(map);
   let openChallenge = null;
-
-  function viewCells8() {
-    const b = map.getBounds();
-    return h3.polygonToCells([
-      [b.getSouth(), b.getWest()], [b.getNorth(), b.getWest()],
-      [b.getNorth(), b.getEast()], [b.getSouth(), b.getEast()],
-    ], 8, false);
-  }
 
   function challengeStatus(c) {
     const now = Date.now();
@@ -938,17 +1033,17 @@
   async function renderChallenges(panel) {
     if (openChallenge) return renderChallengeDetail(panel, openChallenge);
     const rows = check(await sb.from('challenge_members')
-      .select('status, challenges(id, title, metric, starts_at, ends_at, creator, area_cells)')
+      .select('status, challenges(id, title, starts_at, ends_at, creator)')
       .eq('user_id', uid()));
     const list = rows.filter((r) => r.challenges)
       .sort((a, b) => (a.challenges.ends_at < b.challenges.ends_at ? 1 : -1));
-    fill(panel, 
+    fill(panel,
       h('button', { class: 'primary', onclick: () => renderNewChallenge(panel).catch(fail) }, 'New challenge'),
       list.length
         ? h('ul', { class: 'list' }, list.map((r) => {
           const c = r.challenges;
           return h('li', { class: 'person' },
-            h('span', {}, h('b', {}, c.title), h('small', {}, ` ${c.metric} · ${challengeStatus(c)}`)),
+            h('span', {}, h('b', {}, c.title), h('small', {}, ` ${challengeStatus(c)}`)),
             r.status === 'invited'
               ? h('button', {
                 class: 'chip',
@@ -964,34 +1059,30 @@
               : null,
             h('button', { class: 'link', onclick: () => { openChallenge = c; renderCommunity(); } }, 'Open'));
         }))
-        : h('p', { class: 'fine' }, 'Race your friends: most new hexes, distance or score in a set time — optionally in one part of town.'),
+        : null,
+      h('p', { class: 'fine' }, 'Race your friends wherever they live. Each of you is ranked in your own district by the points you earn there ' +
+        'during the challenge, and the best percentile wins: 6th of 500 beats 3rd of 4. ' +
+        'For an anonymous race against everyone in your district, city or country, see Ranks.'),
     );
   }
 
   async function renderChallengeDetail(panel, c) {
     const rows = check(await sb.rpc('challenge_standings', { cid: c.id }));
-    const unit = { score: 'pts', hexes: 'hexes', km: 'km' }[c.metric];
     const mine = rows.find((r) => r.user_id === uid());
-    challengeLayer.clearLayers();
-    fill(panel, 
-      h('button', { class: 'link', onclick: () => { openChallenge = null; challengeLayer.clearLayers(); renderCommunity(); } }, '‹ All challenges'),
+    const joined = (r) => r.status === 'joined';
+    fill(panel,
+      h('button', { class: 'link', onclick: () => { openChallenge = null; renderCommunity(); } }, '‹ All challenges'),
       h('h3', {}, c.title),
-      h('p', { class: 'fine' }, `${c.metric} · ${new Date(c.starts_at).toLocaleDateString()} – ${new Date(c.ends_at).toLocaleDateString()} · ${challengeStatus(c)}`,
-        c.area_cells ? ' · limited to an area' : ''),
+      h('p', { class: 'fine' }, `${new Date(c.starts_at).toLocaleDateString()} – ${new Date(c.ends_at).toLocaleDateString()} · ${challengeStatus(c)}`),
       h('ol', { class: 'list ranks' }, rows.map((r) => h('li', { class: r.user_id === uid() ? 'me' : '' },
-        h('span', { class: 'rank' }, r.status === 'joined' ? String(r.rank) : '–'),
-        h('span', { class: 'who' }, nameOf(r)),
-        h('span', { class: 'val' }, r.status === 'joined' ? `${Number(r.value).toLocaleString()} ${unit}` : 'invited')))),
-      c.area_cells ? h('button', {
-        onclick: () => {
-          challengeLayer.clearLayers();
-          const area = L.polygon(h3.cellsToMultiPolygon(c.area_cells, false), {
-            pane: 'challenge', color: COMMUNITY_COLOR, weight: 3, dashArray: '8 6', fillOpacity: 0.05, interactive: false,
-          }).addTo(challengeLayer);
-          S.closeSheet();
-          map.fitBounds(area.getBounds(), { padding: [30, 30] });
-        },
-      }, 'Show area on map') : null,
+        h('span', { class: 'rank' }, joined(r) ? String(r.rank) : '–'),
+        h('span', { class: 'who' }, nameOf(r),
+          joined(r) && r.district_name
+            ? h('small', {}, `#${r.district_rank ?? '–'} of ${r.district_total ?? '–'} in ${r.district_name} · ${fmtPts(r.value)} pts`)
+            : h('small', {}, joined(r) ? 'No points yet' : 'Invited')),
+        h('span', { class: 'val' }, joined(r) && Number(r.value) > 0 ? `top ${r.top_pct}%` : '–')))),
+      h('p', { class: 'fine' }, 'Ranked by place in your own district (where you score the most). Top % counts from the middle of your place, ' +
+        'so 1st of 1 is top 50%. No points means last.'),
       c.creator === uid()
         ? h('button', {
           class: 'link danger',
@@ -1022,27 +1113,19 @@
   }
 
   async function renderNewChallenge(panel) {
-    const friends = (await loadFriends()).filter((r) => r.status === 'accepted').map((r) => r.other);
+    const friends = (await loadFriends()).filter(isFriend).map((r) => r.other);
     const title = h('input', { placeholder: 'Weekend hex hunt', maxlength: '60', required: true });
-    const metric = h('select', {}, [['hexes', 'Most new hexes'], ['km', 'Longest distance'], ['score', 'Highest score']]
-      .map(([v, l]) => h('option', { value: v }, l)));
     const days = h('select', {}, [1, 3, 7, 14, 30].map((d) => h('option', { value: String(d), selected: d === 7 }, `${d} day${d === 1 ? '' : 's'}`)));
-    const area = h('input', { type: 'checkbox' });
     const picks = friends.map((p) => ({ p, box: h('input', { type: 'checkbox', checked: true }) }));
     fill(panel, h('form', {
       onsubmit: async (e) => {
         e.preventDefault();
         try {
-          let areaCells = null;
-          if (area.checked) {
-            areaCells = viewCells8();
-            if (!areaCells.length || areaCells.length > 400) throw new Error('Zoom the map to the area you want first');
-          }
           const start = new Date();
           const c = check(await sb.from('challenges').insert({
-            title: title.value.trim(), metric: metric.value, area_cells: areaCells,
+            title: title.value.trim(),
             starts_at: start.toISOString(), ends_at: new Date(+start + Number(days.value) * 86400000).toISOString(),
-          }).select('id, title, metric, starts_at, ends_at, creator, area_cells').single());
+          }).select('id, title, starts_at, ends_at, creator').single());
           const invites = picks.filter((x) => x.box.checked).map((x) => ({ challenge_id: c.id, user_id: x.p.id, status: 'invited' }));
           if (invites.length) check(await sb.from('challenge_members').insert(invites));
           openChallenge = c;
@@ -1053,9 +1136,7 @@
       },
     },
     h('label', { class: 'field' }, h('span', {}, 'Name'), title),
-    h('label', { class: 'row' }, h('span', {}, 'Goal'), metric),
     h('label', { class: 'row' }, h('span', {}, 'Length'), days),
-    h('label', { class: 'row' }, h('span', {}, 'Only count hexes in the area on the map now', h('small', {}, 'Distance counts everywhere')), area),
     h('h3', {}, 'Invite'),
     picks.length
       ? picks.map((x) => h('label', { class: 'row' }, h('span', {}, nameOf(x.p)), x.box))
@@ -1067,20 +1148,26 @@
   // ---------- me: profile, badges, streak ----------
 
   async function renderMe(panel) {
-    const [badges, board] = await Promise.all([
+    const [badges, board, homes] = await Promise.all([
       sb.from('badges').select('badge_key, earned_at').eq('user_id', uid()).then(check),
-      sb.rpc('leaderboard', { scope: 'friends', metric: 'score', period: 'all' }).then(check),
+      sb.rpc('leaderboard', { period: 'now' }).then(check),
+      sb.rpc('my_areas', { period: 'now' }).then(check),
     ]);
     const earned = new Map(badges.map((b) => [b.badge_key, b.earned_at]));
     const me = board.find((r) => r.user_id === uid());
     const streak = core.streaks(S.walks.map((w) => w.start));
     const f = profileFields(profile);
-    fill(panel, 
+    fill(panel,
       h('div', { class: 'me-stats' },
-        h('div', {}, h('b', {}, me ? Number(me.value).toLocaleString() : '0'), h('small', {}, 'score')),
+        h('div', {}, h('b', {}, me ? fmtPts(me.value) : '0'), h('small', {}, 'score')),
         h('div', {}, h('b', {}, `${streak.current}🔥`), h('small', {}, 'day streak')),
         h('div', {}, h('b', {}, String(streak.longest)), h('small', {}, 'best streak')),
         h('div', {}, h('b', {}, `${earned.size}/${Object.keys(core.BADGES).length}`), h('small', {}, 'badges'))),
+      homes.length ? h('h3', {}, 'Your areas') : null,
+      homes.length ? h('ul', { class: 'list' }, homes.map((a) => h('li', { class: 'person' },
+        h('span', {}, h('b', {}, a.name || '?'), h('small', {}, KIND_LABEL[a.kind])),
+        h('span', { class: 'val' }, a.rank ? `#${a.rank} of ${a.total} · top ${core.topPercent(a.rank, a.total)}%` : '–')))) : null,
+      homes.length ? h('p', { class: 'fine' }, 'The district, city and country where you score the most. Friends can see your district.') : null,
       h('h3', {}, 'Badges'),
       h('ul', { class: 'badges' }, Object.entries(core.BADGES).map(([key, b]) => h('li', {
         class: earned.has(key) ? 'earned' : '',
