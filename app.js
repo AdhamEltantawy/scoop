@@ -792,6 +792,112 @@
     saveSettings();
   });
 
+  // ---------- trends (private: worked out on the device) ----------
+
+  const TREND_UNITS = {
+    day: { count: 14, now: 'Today', prev: 'yesterday' },
+    week: { count: 12, now: 'This week', prev: 'last week' },
+    month: { count: 12, now: 'This month', prev: 'last month' },
+  };
+  const TREND_METRICS = {
+    hexes: { say: (n) => `${Math.round(n).toLocaleString()} new hex${Math.round(n) === 1 ? '' : 'es'}`, short: (n) => String(Math.round(n)) },
+    points: { say: (n) => `${Math.round(n).toLocaleString()} pts`, short: (n) => String(Math.round(n)) },
+    km: { say: (n) => `${n.toFixed(n >= 10 ? 0 : 1)} km`, short: (n) => n.toFixed(n >= 10 ? 0 : 1) },
+  };
+  const trendPrefs = Object.assign({ unit: 'week', metric: 'hexes' }, loadJSON('scoop.trends.v1', {}));
+
+  function trendEvents(metric) {
+    if (metric === 'hexes') return [...visited.values()].map((t) => ({ t, v: 1 }));
+    if (metric === 'km') return walks.map((w) => ({ t: w.start, v: w.km || 0 }));
+    return walks.filter((w) => typeof w.points === 'number').map((w) => ({ t: w.start, v: w.points }));
+  }
+
+  function periodName(start, unit, i, last) {
+    const d = new Date(start);
+    if (i === last) return TREND_UNITS[unit].now;
+    if (unit === 'day') return d.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' });
+    if (unit === 'week') return `Week of ${d.toLocaleDateString(undefined, { day: 'numeric', month: 'short' })}`;
+    return d.toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
+  }
+
+  function axisLabel(start, unit) {
+    const d = new Date(start);
+    if (unit === 'month') return d.toLocaleDateString(undefined, { month: 'short' });
+    return String(d.getDate());
+  }
+
+  function renderTrends() {
+    const { unit, metric } = trendPrefs;
+    const fmt = TREND_METRICS[metric];
+    const buckets = core.trendBuckets(trendEvents(metric), unit, TREND_UNITS[unit].count);
+    const last = buckets.length - 1;
+    const max = Math.max(...buckets.map((b) => b.value), 0);
+    const peak = buckets.findIndex((b) => b.value === max && max > 0);
+    const readout = $('trendReadout');
+    const showDefault = () => {
+      const prev = buckets[last - 1].value;
+      readout.textContent = `${TREND_UNITS[unit].now}: ${fmt.say(buckets[last].value)} · ${fmt.say(prev)} ${TREND_UNITS[unit].prev}`;
+    };
+    const chart = $('trendChart');
+    chart.replaceChildren(...buckets.map((b, i) => {
+      const col = document.createElement('button');
+      col.type = 'button';
+      col.className = 'col';
+      const name = periodName(b.start, unit, i, last);
+      col.setAttribute('aria-label', `${name}: ${fmt.say(b.value)}`);
+      const show = () => {
+        for (const el of chart.children) el.setAttribute('aria-pressed', String(el === col));
+        readout.textContent = `${name}: ${fmt.say(b.value)}`;
+      };
+      col.addEventListener('mouseenter', show);
+      col.addEventListener('focus', show);
+      col.addEventListener('click', show);
+      if (i === peak) {
+        const tip = document.createElement('span');
+        tip.className = 'tip';
+        tip.textContent = fmt.short(b.value);
+        col.append(tip);
+      }
+      const bar = document.createElement('span');
+      bar.className = b.value > 0 ? 'bar' : 'bar zero';
+      if (b.value > 0) bar.style.height = `${Math.max(2, (b.value / max) * 85)}%`;
+      const lbl = document.createElement('span');
+      lbl.className = 'lbl';
+      lbl.textContent = axisLabel(b.start, unit);
+      col.append(bar, lbl);
+      return col;
+    }));
+    chart.onmouseleave = () => {
+      for (const el of chart.children) el.removeAttribute('aria-pressed');
+      showDefault();
+    };
+    showDefault();
+
+    const total = buckets.reduce((a, b) => a + b.value, 0);
+    const span = { day: 'days', week: 'weeks', month: 'months' }[unit];
+    let summary = `Last ${buckets.length} ${span}: ${fmt.say(total)}`;
+    if (peak >= 0) summary += ` · best: ${periodName(buckets[peak].start, unit, peak, -1)} (${fmt.say(max)})`;
+    if (metric === 'points' && walks.some((w) => typeof w.points !== 'number')) {
+      summary += '. Points are counted for walks recorded since scores started fading.';
+    }
+    $('trendSummary').textContent = summary;
+  }
+
+  $('selTrendMetric').value = trendPrefs.metric;
+  $('selTrendUnit').value = trendPrefs.unit;
+  for (const [id, key] of [['selTrendMetric', 'metric'], ['selTrendUnit', 'unit']]) {
+    $(id).addEventListener('change', (e) => {
+      trendPrefs[key] = e.target.value;
+      saveJSON('scoop.trends.v1', trendPrefs);
+      renderTrends();
+    });
+  }
+  $('btnTrends').addEventListener('click', () => {
+    renderTrends();
+    openSheet('trendsSheet');
+  });
+  $('btnTrendsClose').addEventListener('click', closeSheet);
+
   // Backup
   $('btnExport').addEventListener('click', async () => {
     saveNow();

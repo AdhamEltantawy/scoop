@@ -155,3 +155,24 @@ test('areas: simplify drops points within tolerance and keeps the ends', () => {
   assert.deepEqual(core.simplifyLine(line, 0.001), [[0, 0], [0, 2], [1, 3], [0, 4]]);
   assert.deepEqual(core.simplifyLine([[0, 0], [1, 1]], 1), [[0, 0], [1, 1]]);
 });
+
+test('trend buckets by day, week (from Monday) and month', () => {
+  const now = new Date(2026, 9, 29, 15).getTime(); // Thursday 29 Oct 2026
+  const at = (m, d, h = 12) => new Date(2026, m, d, h).getTime();
+  const events = [
+    { t: at(9, 29), v: 2 }, { t: at(9, 29, 1), v: 1 }, // today
+    { t: at(9, 26), v: 5 },                         // Monday this week
+    { t: at(9, 25), v: 7 },                         // Sunday last week
+    { t: at(8, 30), v: 4 },                         // September
+    { t: at(0, 1), v: 100 },                        // too old for any view
+  ];
+  const days = core.trendBuckets(events, 'day', 7, now);
+  assert.deepEqual(days.map((b) => b.value), [0, 0, 7, 5, 0, 0, 3]);
+  assert.equal(days[6].start, new Date(2026, 9, 29).getTime());
+  const weeks = core.trendBuckets(events, 'week', 3, now);
+  assert.deepEqual(weeks.map((b) => b.value), [0, 7, 8]);
+  assert.equal(weeks[2].start, new Date(2026, 9, 26).getTime());
+  const months = core.trendBuckets(events, 'month', 3, now);
+  assert.deepEqual(months.map((b) => b.value), [0, 4, 15]);
+  assert.equal(months[0].start, new Date(2026, 7, 1).getTime());
+});

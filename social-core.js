@@ -192,6 +192,39 @@
     return box;
   }
 
+  // ---------- trends ----------
+
+  /** Start (local time) of the day, week (Monday) or month containing t. */
+  function periodStart(t, unit) {
+    const d = new Date(t);
+    d.setHours(0, 0, 0, 0);
+    if (unit === 'week') d.setDate(d.getDate() - ((d.getDay() + 6) % 7));
+    if (unit === 'month') d.setDate(1);
+    return d.getTime();
+  }
+
+  /**
+   * Totals per day / week / month for the last `count` periods, oldest first.
+   * events: [{ t, v }]. Returns [{ start, value }].
+   */
+  function trendBuckets(events, unit, count, now = Date.now()) {
+    const starts = [];
+    const d = new Date(periodStart(now, unit));
+    for (let i = 0; i < count; i++) {
+      starts.unshift(d.getTime());
+      if (unit === 'day') d.setDate(d.getDate() - 1);
+      else if (unit === 'week') d.setDate(d.getDate() - 7);
+      else d.setMonth(d.getMonth() - 1);
+    }
+    const index = new Map(starts.map((s, i) => [s, i]));
+    const out = starts.map((start) => ({ start, value: 0 }));
+    for (const e of events) {
+      const i = index.get(periodStart(e.t, unit));
+      if (i !== undefined) out[i].value += e.v;
+    }
+    return out;
+  }
+
   /** Current and longest run of consecutive local days with a walk. */
   function streaks(walkStarts, now = Date.now()) {
     const dayOf = (ms) => {
@@ -290,7 +323,7 @@
   return {
     CHECKIN_KINDS, BADGES, KUDOS, DAY_MS, HALF_LIFE_DAYS, CORE_SCALE,
     checkinPoints, regularBonus, heat, hexValue, hexScore, visitGain, inRing, inCore,
-    pickAreas, simplifyLine, inWays, waysBox,
+    pickAreas, simplifyLine, inWays, waysBox, periodStart, trendBuckets,
     streaks, compare, zoneFilter, cellSig, syncDelta, topPercent, chunk, validUsername, timeAgo, parseInvite,
   };
 });

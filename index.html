@@ -104,6 +104,7 @@
     <ul class="zone-list" id="zoneList"></ul>
 
     <div class="buttons">
+      <button id="btnTrends" class="wide">My trends</button>
       <button id="btnShareCard" class="wide">Share my map as an image</button>
       <button id="btnImportGpx">Import GPX…</button>
       <button id="btnExport">Export backup</button>
@@ -117,6 +118,27 @@
       <span id="communityNote">If you sign in to Community, only hex ids, visit counts and walk totals are uploaded, never your GPS tracks.</span>
       <span id="walkTip">Keep the screen on while walking: phones pause location in background tabs.</span></p>
     <button class="close" id="btnClose">Done</button>
+  </section>
+
+  <section class="sheet" id="trendsSheet" aria-label="My trends" hidden>
+    <h2>My trends</h2>
+    <div class="filters">
+      <select id="selTrendMetric" aria-label="What to show">
+        <option value="hexes">New hexes</option>
+        <option value="points">Points earned</option>
+        <option value="km">Distance</option>
+      </select>
+      <select id="selTrendUnit" aria-label="Per">
+        <option value="day">Daily</option>
+        <option value="week">Weekly</option>
+        <option value="month">Monthly</option>
+      </select>
+    </div>
+    <p class="trend-readout" id="trendReadout" aria-live="polite"></p>
+    <div class="trend-chart" id="trendChart"></div>
+    <p class="fine" id="trendSummary"></p>
+    <p class="fine">Only you can see this. It's worked out on this device from your walks.</p>
+    <button class="close" id="btnTrendsClose">Done</button>
   </section>
 
   <section class="sheet" id="communitySheet" aria-label="Community" hidden>

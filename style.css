@@ -292,3 +292,21 @@ body.comparing .toast { top: calc(118px + var(--safe-top)); }
 .standing { font-weight: 600; color: var(--accent-2); }
 .ranks .friend .who { color: #4cc9f0; }
 .ranks .gap { justify-content: center; color: var(--muted); padding: 2px 0; }
+
+/* Trends */
+.trend-readout { margin: 14px 0 6px; font-weight: 600; min-height: 1.4em; }
+.trend-chart {
+  display: flex; align-items: stretch; gap: 2px; height: 180px; padding-bottom: 20px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.12); position: relative;
+}
+.trend-chart .col {
+  flex: 1; min-width: 0; position: relative; display: flex; flex-direction: column; justify-content: flex-end; align-items: center;
+  background: none; border: 0; padding: 0; border-radius: 6px;
+}
+.trend-chart .col:hover, .trend-chart .col:focus-visible, .trend-chart .col[aria-pressed="true"] { background: rgba(255, 255, 255, 0.06); outline: none; }
+.trend-chart .bar { width: 100%; max-width: 24px; background: var(--accent); border-radius: 4px 4px 0 0; min-height: 0; }
+.trend-chart .bar.zero { height: 0; }
+.trend-chart .tip { font-size: 11px; color: var(--text); margin-bottom: 2px; font-variant-numeric: tabular-nums; }
+.trend-chart .lbl {
+  position: absolute; bottom: -18px; font-size: 10px; color: var(--muted); white-space: nowrap; font-variant-numeric: tabular-nums;
+}
