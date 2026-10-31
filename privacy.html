@@ -18,7 +18,7 @@
 <body>
 <main>
   <h1>Scoop privacy</h1>
-  <p class="muted">Last updated 26 October 2026</p>
+  <p class="muted">Last updated 31 October 2026</p>
 
   <h2>Without an account</h2>
   <p>Scoop keeps your explored hexes, walks and settings on your device only. Nothing is sent anywhere except
@@ -28,8 +28,10 @@
   <p>Signing in is optional. If you do, Scoop stores this in its Supabase database:</p>
   <ul>
     <li>Your email address (for sign-in codes) and the username, display name and home city you choose.</li>
-    <li>The ids of the street-sized hexagons (about 0.015 km² each) you walked through, when you first visited
-      each one and how many walks went through it.</li>
+    <li>The ids of the street-sized hexagons (about 0.015 km² each) you walked through, when you first and last
+      visited each one, how many walks went through it, and the country, city and district it's in. Visit times are
+      only used to work out scores (hexes cool down over time); nobody can read them back, including you.</li>
+    <li>A daily total of the points you earned in each area, for weekly and monthly leaderboards.</li>
     <li>Walk totals: start and end time, distance and the number of new hexes. <strong>Your GPS tracks are never uploaded.</strong></li>
     <li>Check-ins you make (the hex, the kind, an optional note and an optional photo, re-encoded so it carries
       no location data), kudos, friend requests, challenges and badges.</li>
@@ -37,13 +39,19 @@
 
   <h2>Who can see it</h2>
   <ul>
-    <li>Your accepted friends can see your profile, explored hexes, walks, check-ins and badges.</li>
-    <li>Nobody else can, unless you turn on <em>Public profile</em>. Then your username and totals appear on public
-      leaderboards, and your explored areas count towards the community map at block level (about 0.1 km²), where you
-      may be shown as the first explorer of a block.</li>
+    <li>Your friends can see your profile, which hexes you explored and how often (not when), your walks,
+      check-ins, badges, scores and home district. Friendships last a month unless you both renew.</li>
+    <li>Everyone else only sees an anonymous row with your score and rank on the leaderboards of the district,
+      city and country you explored in.</li>
     <li>Hexes inside your <em>privacy zones</em> (set in the menu, stored only on your device) are never uploaded,
       and are removed from the server if you add a zone later.</li>
   </ul>
+
+  <h2>Looking up areas</h2>
+  <p>When you're signed in, Scoop finds out which official district, city and country your hexes are in by asking
+    the public <a href="https://wiki.openstreetmap.org/wiki/Overpass_API">Overpass API</a> (OpenStreetMap data)
+    about a point in a hex, rounded to about 10 m, then downloading that district's outline once. Further hexes inside
+    it are matched on your device. Hexes inside privacy zones are never looked up.</p>
 
   <h2>Deleting your data</h2>
   <p>Community → Me → <em>Delete my account</em> permanently removes your account, photos and everything listed

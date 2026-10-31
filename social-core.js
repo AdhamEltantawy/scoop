@@ -1,4 +1,4 @@
-/* Scoop community: pure helpers shared by social.js and the unit tests
+/* Scoop: pure helpers shared by app.js, social.js and the unit tests
  * (tests/social-core.test.mjs). No DOM, no network.
  */
 (function (root, factory) {
@@ -43,6 +43,188 @@
     return visits > 1 ? Math.floor(Math.log2(visits)) : 0;
   }
 
+  // ---------- heat and hex scores ----------
+  // Keep in sync with heat() and hex_value() in the Supabase migration.
+
+  const DAY_MS = 86400000;
+  const HALF_LIFE_DAYS = 30;
+
+  /** How warm a hex is: 1 right after a visit, halving every 30 days. 0 if never visited. */
+  function heat(lastVisit, now = Date.now()) {
+    if (!lastVisit) return 0;
+    return Math.pow(0.5, Math.max(0, now - lastVisit) / (HALF_LIFE_DAYS * DAY_MS));
+  }
+
+  /** What a fully warm hex is worth: 1, plus the regular bonus for repeat visits. */
+  function hexValue(visits) {
+    return visits >= 1 ? 1 + regularBonus(visits) : 0;
+  }
+
+  function hexScore(visits, lastVisit, now = Date.now()) {
+    return hexValue(visits) * heat(lastVisit, now);
+  }
+
+  /**
+   * Points for walking through a hex at `now`: it's back to full value, so you
+   * earn whatever it had cooled off, plus any rise in its regular bonus.
+   */
+  function visitGain(oldVisits, oldLastVisit, newVisits, now) {
+    return Math.max(0, hexValue(newVisits) - hexScore(oldVisits, oldLastVisit, now));
+  }
+
+  // ---------- edge band ----------
+
+  // A GPS fix only unlocks a hex when it's inside the hex shrunk around its
+  // centre to 90% of the area, so wobble along a street doesn't unlock the
+  // hex next door.
+  const CORE_SCALE = Math.sqrt(0.9);
+
+  /** Ray casting on [x, y] points. */
+  function inRing(x, y, ring) {
+    let inside = false;
+    for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+      const [xi, yi] = ring[i];
+      const [xj, yj] = ring[j];
+      if ((yi > y) !== (yj > y) && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) inside = !inside;
+    }
+    return inside;
+  }
+
+  /**
+   * True when [lat, lng] is in the core of the hex with this centre and boundary
+   * (both [lat, lng]). Uses a local flat projection, fine at hex scale.
+   */
+  function inCore(lat, lng, centre, boundary, scale = CORE_SCALE) {
+    const k = Math.cos((centre[0] * Math.PI) / 180);
+    const ring = boundary.map(([la, ln]) => [(ln - centre[1]) * k, la - centre[0]]);
+    return inRing(((lng - centre[1]) * k) / scale, (lat - centre[0]) / scale, ring);
+  }
+
+  // ---------- official areas (OpenStreetMap admin boundaries) ----------
+
+  const CITY_TAG = /^(city|town|municipality)$/;
+
+  /**
+   * Pick country, city and district from the admin boundaries containing a
+   * point (Overpass is_in results: [{ id, tags }]). Admin levels mean different
+   * things per country, so:
+   *  - country: admin_level 2
+   *  - city: a level 4–8 boundary tagged as a city/town/municipality (deepest
+   *    first), else level 8, else the deepest of levels 4–7
+   *  - district: the first level below the city, down to level 10
+   * Returns { country, city, district }, each { id: 'r123', name, level } or null.
+   */
+  function pickAreas(relations) {
+    const admin = relations
+      .filter((r) => r.tags && r.tags.boundary === 'administrative' && /^\d+$/.test(r.tags.admin_level || ''))
+      .map((r) => ({ id: 'r' + r.id, name: r.tags['name:en'] || r.tags.name || `#${r.id}`, level: Number(r.tags.admin_level), tags: r.tags }));
+    const pick = (r) => (r ? { id: r.id, name: r.name, level: r.level } : null);
+    const country = admin.find((r) => r.level === 2);
+    const cityish = admin.filter((r) => r.level >= 4 && r.level <= 8).sort((a, b) => b.level - a.level);
+    const city = cityish.find((r) => CITY_TAG.test(r.tags.place || '') || CITY_TAG.test(r.tags.border_type || '')) ||
+      cityish.find((r) => r.level === 8) || cityish[0];
+    const floor = city ? city.level : 2;
+    const district = admin.filter((r) => r.level > floor && r.level <= 10).sort((a, b) => a.level - b.level)[0];
+    return { country: pick(country), city: pick(city), district: pick(district) };
+  }
+
+  /** Douglas–Peucker on [lat, lng] points; keeps both ends. tol in degrees. */
+  function simplifyLine(points, tol) {
+    if (points.length <= 2) return points.slice();
+    const keep = new Uint8Array(points.length);
+    keep[0] = keep[points.length - 1] = 1;
+    const stack = [[0, points.length - 1]];
+    while (stack.length) {
+      const [a, b] = stack.pop();
+      const [ay, ax] = points[a];
+      const [by, bx] = points[b];
+      const dx = bx - ax;
+      const dy = by - ay;
+      const len2 = dx * dx + dy * dy;
+      let worst = -1;
+      let at = -1;
+      for (let i = a + 1; i < b; i++) {
+        const [py, px] = points[i];
+        let d;
+        if (len2 === 0) d = (px - ax) ** 2 + (py - ay) ** 2;
+        else {
+          const t = Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / len2));
+          d = (px - ax - t * dx) ** 2 + (py - ay - t * dy) ** 2;
+        }
+        if (d > worst) { worst = d; at = i; }
+      }
+      if (worst > tol * tol) {
+        keep[at] = 1;
+        stack.push([a, at], [at, b]);
+      }
+    }
+    return points.filter((_, i) => keep[i]);
+  }
+
+  /**
+   * Point in a boundary given as its member ways ([[lat, lng], …] each), in any
+   * order. Even–odd crossings over all segments, so the ways don't need to be
+   * stitched into rings, and holes and exclaves just work.
+   */
+  function inWays(lat, lng, ways) {
+    let inside = false;
+    for (const w of ways) {
+      for (let i = 1; i < w.length; i++) {
+        const [yi, xi] = w[i];
+        const [yj, xj] = w[i - 1];
+        if ((yi > lat) !== (yj > lat) && lng < ((xj - xi) * (lat - yi)) / (yj - yi) + xi) inside = !inside;
+      }
+    }
+    return inside;
+  }
+
+  /** [south, west, north, east] around a boundary's ways. */
+  function waysBox(ways) {
+    const box = [Infinity, Infinity, -Infinity, -Infinity];
+    for (const w of ways) {
+      for (const [lat, lng] of w) {
+        if (lat < box[0]) box[0] = lat;
+        if (lng < box[1]) box[1] = lng;
+        if (lat > box[2]) box[2] = lat;
+        if (lng > box[3]) box[3] = lng;
+      }
+    }
+    return box;
+  }
+
+  // ---------- trends ----------
+
+  /** Start (local time) of the day, week (Monday) or month containing t. */
+  function periodStart(t, unit) {
+    const d = new Date(t);
+    d.setHours(0, 0, 0, 0);
+    if (unit === 'week') d.setDate(d.getDate() - ((d.getDay() + 6) % 7));
+    if (unit === 'month') d.setDate(1);
+    return d.getTime();
+  }
+
+  /**
+   * Totals per day / week / month for the last `count` periods, oldest first.
+   * events: [{ t, v }]. Returns [{ start, value }].
+   */
+  function trendBuckets(events, unit, count, now = Date.now()) {
+    const starts = [];
+    const d = new Date(periodStart(now, unit));
+    for (let i = 0; i < count; i++) {
+      starts.unshift(d.getTime());
+      if (unit === 'day') d.setDate(d.getDate() - 1);
+      else if (unit === 'week') d.setDate(d.getDate() - 7);
+      else d.setMonth(d.getMonth() - 1);
+    }
+    const index = new Map(starts.map((s, i) => [s, i]));
+    const out = starts.map((start) => ({ start, value: 0 }));
+    for (const e of events) {
+      const i = index.get(periodStart(e.t, unit));
+      if (i !== undefined) out[i].value += e.v;
+    }
+    return out;
+  }
+
   /** Current and longest run of consecutive local days with a walk. */
   function streaks(walkStarts, now = Date.now()) {
     const dayOf = (ms) => {
@@ -82,18 +264,32 @@
     };
   }
 
+  /** What was uploaded for a cell, to spot changes. */
+  function cellSig(x) {
+    return `${x.v}|${x.l}|${x.a ? x.a.join(',') : ''}`;
+  }
+
   /**
-   * Cells that changed since the last sync, in the shape sync_cells() takes.
-   * synced: { cell: visitsAlreadyUploaded }.
+   * Cells that changed since the last sync, in the shape sync_cells() takes:
+   * { c, t: first visit, l: last visit, v: visits, a: [country, city, district] | undefined }.
+   * synced: { cell: cellSig of what was uploaded }. areaOf(cell) returns the
+   * area ids or null when not looked up yet.
    */
-  function syncDelta(visited, visitCount, synced, isHidden) {
+  function syncDelta(visited, visitCount, lastSeen, areaOf, synced, isHidden) {
     const out = [];
     for (const [c, t] of visited) {
       if (isHidden(c)) continue;
-      const v = visitCount(c);
-      if (synced[c] !== v) out.push({ c, t, v });
+      const a = areaOf(c);
+      const x = { c, t, l: lastSeen.get(c) || t, v: visitCount(c) };
+      if (a) x.a = [a.country || '', a.city || '', a.district || ''];
+      if (synced[c] !== cellSig(x)) out.push(x);
     }
     return out;
+  }
+
+  /** Top x% from a rank among n people, counting from the middle of your place. */
+  function topPercent(rank, total) {
+    return total > 0 ? Math.round(((rank - 0.5) / total) * 1000) / 10 : 100;
   }
 
   function chunk(list, size) {
@@ -125,7 +321,9 @@
   }
 
   return {
-    CHECKIN_KINDS, BADGES, KUDOS,
-    checkinPoints, regularBonus, streaks, compare, zoneFilter, syncDelta, chunk, validUsername, timeAgo, parseInvite,
+    CHECKIN_KINDS, BADGES, KUDOS, DAY_MS, HALF_LIFE_DAYS, CORE_SCALE,
+    checkinPoints, regularBonus, heat, hexValue, hexScore, visitGain, inRing, inCore,
+    pickAreas, simplifyLine, inWays, waysBox, periodStart, trendBuckets,
+    streaks, compare, zoneFilter, cellSig, syncDelta, topPercent, chunk, validUsername, timeAgo, parseInvite,
   };
 });

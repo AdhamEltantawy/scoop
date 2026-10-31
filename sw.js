@@ -1,6 +1,6 @@
 // Offline support: the app shell is cached; map tiles come from the network
 // (the browser's normal HTTP cache keeps recently viewed tiles).
-const CACHE = 'scoop-shell-v3';
+const CACHE = 'scoop-shell-v4';
 const SHELL = [
   './',
   'index.html',
@@ -8,6 +8,7 @@ const SHELL = [
   'app.js',
   'config.js',
   'social-core.js',
+  'areas.js',
   'social.js',
   'manifest.webmanifest',
   'icons/icon.svg',
