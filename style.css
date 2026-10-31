@@ -279,3 +279,8 @@ body.comparing .toast { top: calc(118px + var(--safe-top)); }
 .swatch { display: inline-block; width: 12px; height: 12px; border-radius: 3px; vertical-align: -1px; }
 .swatch.hot { background: #ff7a3d; }
 .swatch.cold { background: #8d98ad; opacity: 0.6; }
+.checkin-bubble {
+  display: grid; place-items: center; font: 700 11px/1 system-ui, sans-serif; color: #1d2433;
+  background: rgba(255, 255, 255, 0.85); border: 2px solid #4cc9f0; border-radius: 50%; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+}
+.checkin-bubble.mine { border-color: var(--accent); }

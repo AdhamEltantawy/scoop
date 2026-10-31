@@ -1125,7 +1125,12 @@
 
   // ---------- check-ins ----------
 
-  const checkinLayer = L.layerGroup().addTo(map);
+  // Close up, each check-in gets its own pin. Zoomed out, pins would cover the
+  // street hexes, so check-ins are grouped into one small count per block.
+  const PIN_ZOOM = 16;
+  const BUBBLE_ZOOM = 13;
+  const checkinLayer = L.layerGroup();
+  const bubbleLayer = L.layerGroup();
 
   async function loadCheckinMarkers() {
     if (!profile) return;
@@ -1135,6 +1140,8 @@
         .select('id, user_id, cell, kind, note, met_with, created_at, author:profiles!checkins_user_id_fkey(username, display_name)')
         .gte('created_at', since).order('created_at', { ascending: false }).limit(300));
       checkinLayer.clearLayers();
+      bubbleLayer.clearLayers();
+      const blocks = new Map();
       for (const r of rows) {
         const kind = core.CHECKIN_KINDS[r.kind];
         L.marker(h3.cellToLatLng(r.cell), {
@@ -1145,6 +1152,18 @@
           r.note ? [r.note, h('br')] : null,
           h('small', {}, core.timeAgo(Date.parse(r.created_at)))))
           .addTo(checkinLayer);
+        const block = h3.cellToParent(r.cell, 9);
+        const b = blocks.get(block) || { n: 0, mine: false };
+        b.n++;
+        b.mine = b.mine || r.user_id === uid();
+        blocks.set(block, b);
+      }
+      for (const [block, b] of blocks) {
+        const at = h3.cellToLatLng(block);
+        L.marker(at, {
+          icon: L.divIcon({ className: `checkin-bubble${b.mine ? ' mine' : ''}`, html: String(b.n), iconSize: [20, 20] }),
+          title: `${b.n} check-in${b.n === 1 ? '' : 's'} — tap to zoom in`,
+        }).on('click', () => map.setView(at, PIN_ZOOM)).addTo(bubbleLayer);
       }
       toggleCheckinMarkers();
     } catch (err) {
@@ -1153,9 +1172,13 @@
   }
 
   function toggleCheckinMarkers() {
-    const show = map.getZoom() >= 13;
-    if (show && !map.hasLayer(checkinLayer)) checkinLayer.addTo(map);
-    if (!show && map.hasLayer(checkinLayer)) map.removeLayer(checkinLayer);
+    const z = map.getZoom();
+    const show = (layer, on) => {
+      if (on && !map.hasLayer(layer)) layer.addTo(map);
+      if (!on && map.hasLayer(layer)) map.removeLayer(layer);
+    };
+    show(checkinLayer, z >= PIN_ZOOM);
+    show(bubbleLayer, z >= BUBBLE_ZOOM && z < PIN_ZOOM);
   }
   map.on('zoomend', toggleCheckinMarkers);
 

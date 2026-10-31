@@ -15,6 +15,7 @@
   const MAX_PATH_STEPS = 20;        // GPX import: fill gaps between points up to ~20 cells
   const MAX_LIVE_PATH_STEPS = 8;    // live walks: fill short GPS dropouts only
   const MIN_STEP_METERS = 5;        // ignore GPS jitter for distance
+  const START_METERS = 100;         // a walk records hexes once you're this far from where it started
 
   // Walking-only detection. Speed comes from the GPS chip (Doppler) when it
   // reports one, otherwise from distance covered over the last ~20 s.
@@ -575,6 +576,7 @@
       walk.pending = [];
       walk.lastCell = null;
       walk.lastFix = null;
+      if (!walk.armed) walk.origin = null; // measure the first 100 m again once walking
       walk.slowSince = null;
       walk.slowFixes = [];
       setMoving(true);
@@ -587,19 +589,37 @@
     scheduleRender();
   }
 
+  /** True when `here` is in the inner 90% of the hex (outside its edge band). */
+  function inCoreOf(here, cell) {
+    return core.inCore(here.lat, here.lng, h3.cellToLatLng(cell), h3.cellToBoundary(cell));
+  }
+
   /** Queue the cells walked to reach `here`, plus the distance covered. */
   function addStep(here, cell, time) {
+    // Don't record the hex where the walk was switched on: wait until you've
+    // walked 100 m from there. That stretch still counts towards distance.
+    if (!walk.armed) {
+      if (!walk.origin) walk.origin = here;
+      if (haversine(walk.origin, here) < START_METERS) return;
+      walk.armed = true;
+      walk.lastFix = { latlng: walk.origin, time };
+      if (!walk.replay) toast('Recording hexes');
+    }
+    // Edge band: GPS wobble near a hex's edge doesn't unlock it. Stay in the
+    // hex you were in until the fix is well inside the new one.
+    if (cell !== walk.lastCell && !inCoreOf(here, cell)) cell = walk.lastCell;
+
     const prev = walk.lastFix;
     if (prev && haversine(prev.latlng, here) < MIN_STEP_METERS) {
-      if (cell !== walk.lastCell) {
+      if (cell && cell !== walk.lastCell) {
         walk.pending.push({ time, cells: [cell], km: 0 });
         walk.lastCell = cell;
       }
       return;
     }
     const km = prev ? haversine(prev.latlng, here) / 1000 : 0;
-    walk.pending.push({ time, cells: pathBetween(walk.lastCell, cell, MAX_LIVE_PATH_STEPS), km });
-    walk.lastCell = cell;
+    walk.pending.push({ time, cells: cell ? pathBetween(walk.lastCell, cell, MAX_LIVE_PATH_STEPS) : [], km });
+    if (cell) walk.lastCell = cell;
     walk.lastFix = { latlng: here, time };
   }
 
@@ -689,7 +709,8 @@
       map.setView(lastPos.latlng, Math.max(map.getZoom(), 16));
       recordFix(lastPos.latlng, lastPos.accuracy, Date.now(), null);
     }
-    toast(isNative ? 'Walk started — you can lock your phone' : 'Walk started — keep this screen open');
+    toast((isNative ? 'Walk started — you can lock your phone.' : 'Walk started — keep this screen open.') +
+      ` Hexes count once you're ${START_METERS} m away.`, 4000);
     scheduleRender();
   }
 
