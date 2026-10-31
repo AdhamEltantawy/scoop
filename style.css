@@ -353,7 +353,7 @@ div.list-row { cursor: default; }
   font-size: 16px; font-weight: 500;
 }
 .input:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
-.input.code { height: 64px; border-radius: var(--r-tile); text-align: center; font: 700 30px var(--font-display); letter-spacing: .4em; }
+.input.code { height: 64px; border-radius: var(--r-tile); text-align: center; font: 700 28px var(--font-display); letter-spacing: .22em; }
 .input.note { height: 50px; font-size: 15px; }
 .inline-form { display: flex; gap: 8px; }
 .inline-form .input { flex: 1; height: 44px; font-size: 15px; }

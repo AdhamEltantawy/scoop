@@ -103,7 +103,8 @@ enough). Until `config.js` is filled in, the app runs without them.
    level security, the scoring and leaderboard functions, and the private
    `checkin-photos` storage bucket.
 3. *Authentication → Emails*: add `{{ .Token }}` to the *Magic Link* and *Confirm signup* templates so the
-   email includes the 6-digit code the app asks for. Email sign-in is enabled
+   email includes the code the app asks for (6 to 10 digits, whatever the
+   project's Email OTP length is). Email sign-in is enabled
    by default.
 4. Copy the project URL and the **anon** key from *Project Settings → API* into
    `config.js`. The anon key is public by design, because row level security
