@@ -1384,7 +1384,8 @@
     }).catch(() => {});
   }
 
-  if (!loadJSON(ONBOARDED_KEY, false) && !visited.size) showOnboarding(0);
+  // Everyone sees it once, including people upgrading with hexes already saved.
+  if (!loadJSON(ONBOARDED_KEY, false)) showOnboarding(0);
 
   if (isNative) {
     $('walkTip').textContent = 'Walks keep recording with the screen off — look for the notification.';
