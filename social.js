@@ -529,7 +529,7 @@
       valid = () => /^\S+@\S+\.\S+$/.test(email.value.trim());
       email.addEventListener('input', () => { cta.disabled = !valid(); });
       content = [
-        h('span', { class: 'body' }, "We'll email you a 6-digit code. No password to remember."),
+        h('span', { class: 'body' }, "We'll email you a sign-in code. No password to remember."),
         h('label', { class: 'field' }, 'Email', email),
       ];
       submit = async () => {
@@ -539,12 +539,13 @@
       };
     } else if (step === 1) {
       const code = h('input', {
-        class: 'input code', inputmode: 'numeric', autocomplete: 'one-time-code', placeholder: '••••••', maxlength: '6',
+        class: 'input code', inputmode: 'numeric', autocomplete: 'one-time-code', placeholder: '••••••••', maxlength: '10',
         'aria-label': 'Code from the email',
       });
-      valid = () => /^\d{6}$/.test(code.value.trim());
+      // Supabase sends 6 to 10 digits, depending on the project's OTP length.
+      valid = () => /^\d{6,10}$/.test(code.value.trim());
       code.addEventListener('input', () => {
-        code.value = code.value.replace(/\D/g, '').slice(0, 6);
+        code.value = code.value.replace(/\D/g, '').slice(0, 10);
         cta.disabled = !valid();
       });
       content = [
