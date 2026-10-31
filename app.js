@@ -26,22 +26,31 @@
                                     // so a vehicle pulling away doesn't count
   const SPEED_WINDOW_MS = 20000;
 
+  // Colours come from tokens.css so the map and the chrome share one palette.
+  const rootStyle = getComputedStyle(document.documentElement);
+  const tok = (name, fallback) => rootStyle.getPropertyValue(name).trim() || fallback;
   const COLORS = {
-    visited: '#ff7a3d',
-    walk: '#ffd166',
-    grid: '#1d2433',
-    here: '#2f6bff',
+    walk: tok('--walk', '#19C29A'),
+    walkStroke: tok('--walk-stroke', '#053F33'),
+    grid: tok('--grid', '#1A1A1A'),
+    here: tok('--location', '#1E1A16'),
+    hereWaiting: '#8A8178',
+    friend: tok('--friend-overlay', '#3355E0'),
+    privacy: tok('--privacy', '#5C6470'),
+    privacyStroke: tok('--privacy-stroke', '#3A4048'),
+    community: tok('--community', '#8A4FC7'),
   };
 
-  // Explored hexes are drawn in heat bands, from just walked to long ago.
+  // Explored hexes are drawn in heat bands, from just walked to long ago. Each
+  // band has a darker stroke so even the coldest still reads as explored.
   // Heat halves every 30 days: 0.5 after a month, 0.25 after two, 0.1 after ~3.3.
-  const HEAT_BANDS = [
-    { min: 0.75, color: '#ff7a3d', fill: 0.5 },
-    { min: 0.5, color: '#f08a52', fill: 0.42 },
-    { min: 0.25, color: '#cf9b78', fill: 0.34 },
-    { min: 0.1, color: '#a8a39a', fill: 0.27 },
-    { min: 0, color: '#8d98ad', fill: 0.2 },
-  ];
+  const HEAT_BANDS = [0.75, 0.5, 0.25, 0.1, 0].map((min, i) => ({
+    min,
+    color: tok(`--heat-${i}`, ['#E0301E', '#EE6B2F', '#F49E5E', '#EBC8A2', '#C9BCAE'][i]),
+    stroke: tok(`--heat-${i}-stroke`, ['#9A1D0E', '#B0441A', '#B26D33', '#A68A6B', '#857868'][i]),
+    fill: Number(tok(`--heat-${i}-opacity`, '')) || [0.72, 0.62, 0.55, 0.5, 0.48][i],
+    name: ['Now', '1 mo', '2 mo', '3 mo', '100d+'][i],
+  }));
   const heatBand = (h) => HEAT_BANDS.findIndex((b) => h >= b.min);
 
   // ---------- persistence ----------
@@ -189,6 +198,7 @@
     return added;
   }
 
+
   // ---------- map ----------
 
   const map = L.map('map', {
@@ -196,24 +206,29 @@
     preferCanvas: true,
     attributionControl: true,
   });
+  map.attributionControl.setPosition('bottomleft');
 
-  // Basemaps that need no API key. Pick another in the menu if one stops working.
+  // Basemaps that need no API key. Pick another in Settings if one stops working.
   const OSM_ATTR = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors';
   const ESRI = 'https://server.arcgisonline.com/ArcGIS/rest/services';
   const BASEMAPS = {
     osm: {
+      label: 'OSM',
       url: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
       options: { maxZoom: 19, attribution: OSM_ATTR },
     },
-    hot: {
-      url: 'https://{s}.tile.openstreetmap.fr/hot/{z}/{x}/{y}.png',
-      options: { maxZoom: 19, subdomains: 'abc', attribution: OSM_ATTR + ', Humanitarian style by HOT' },
-    },
     streets: {
+      label: 'Esri',
       url: ESRI + '/World_Street_Map/MapServer/tile/{z}/{y}/{x}',
       options: { maxZoom: 19, attribution: 'Tiles &copy; Esri' },
     },
+    hot: {
+      label: 'Humanitarian',
+      url: 'https://{s}.tile.openstreetmap.fr/hot/{z}/{x}/{y}.png',
+      options: { maxZoom: 19, subdomains: 'abc', attribution: OSM_ATTR + ', Humanitarian style by HOT' },
+    },
     satellite: {
+      label: 'Satellite',
       url: ESRI + '/World_Imagery/MapServer/tile/{z}/{y}/{x}',
       options: { maxZoom: 19, attribution: 'Imagery &copy; Esri, Maxar, Earthstar Geographics' },
     },
@@ -228,7 +243,7 @@
     baseLayer = L.tileLayer(def.url, Object.assign({ referrerPolicy: 'strict-origin-when-cross-origin' }, def.options))
       .on('tileload', () => { loaded++; })
       .on('tileerror', () => {
-        if (++failed === 6 && loaded === 0) toast('Map not loading — try another map style in the menu', 5000);
+        if (++failed === 6 && loaded === 0) toast('Map not loading — try another map style in Settings', 5000);
       })
       .addTo(map);
   }
@@ -250,10 +265,11 @@
   const hereLayer = L.layerGroup([], { pane: 'here' }).addTo(map);
 
   const accuracyCircle = L.circle([0, 0], {
-    pane: 'here', radius: 1, color: COLORS.here, weight: 1, fillOpacity: 0.12, interactive: false,
+    pane: 'here', radius: 1, color: COLORS.here, weight: 1, opacity: 0.35,
+    fillColor: COLORS.here, fillOpacity: 0.1, interactive: false,
   });
   const youMarker = L.circleMarker([0, 0], {
-    pane: 'here', radius: 7, color: '#fff', weight: 3, fillColor: COLORS.here, fillOpacity: 1, interactive: false,
+    pane: 'here', radius: 8, color: '#fff', weight: 3, fillColor: COLORS.here, fillOpacity: 1, interactive: false,
   });
   let hereHex = null;
 
@@ -290,16 +306,32 @@
     }, wait);
   }
 
+  /**
+   * Cells as one multi-polygon layer with one ring per hex, so every hex gets
+   * its own stroke (merged outlines would hide the hex grid) while Leaflet
+   * still draws a single layer.
+   */
+  function hexLayer(cells, options) {
+    // Zoomed far out, hexes are a few pixels wide: merge them instead.
+    if (map.getZoom() < 14 || cells.length > 8000) return L.polygon(h3.cellsToMultiPolygon(cells, false), options);
+    return L.polygon(cells.map((c) => [h3.cellToBoundary(c)]), options);
+  }
+
+  /** Hexes drawn as "this walk" (committed plus still pending). */
+  function walkDisplayCells() {
+    const out = new Set();
+    if (!walk) return out;
+    for (const c of walk.newCells) out.add(c);
+    for (const c of walk.cells.keys()) out.add(c);
+    for (const p of walk.pending) for (const c of p.cells) out.add(c);
+    return out;
+  }
+
   function render() {
     const res = BASE_RES;
     const now = Date.now();
     const display = visited;
-
-    const walkDisplay = new Set();
-    if (walk) {
-      for (const c of walk.newCells) walkDisplay.add(c);
-      for (const p of walk.pending) for (const c of p.cells) if (!visited.has(c)) walkDisplay.add(c);
-    }
+    const walkDisplay = walkDisplayCells();
 
     // Only draw what's near the viewport — keeps big histories fast.
     const bounds = map.getBounds().pad(0.5);
@@ -308,78 +340,89 @@
       return bounds.contains([lat, lng]);
     };
     const bands = HEAT_BANDS.map(() => []);
-    for (const c of visited.keys()) if (inView(c)) bands[heatBand(cellHeat(c, now))].push(c);
+    for (const c of visited.keys()) if (!walkDisplay.has(c) && inView(c)) bands[heatBand(cellHeat(c, now))].push(c);
     const drawWalk = [...walkDisplay].filter(inView);
 
     visitedLayer.clearLayers();
-    bands.forEach((cells, i) => {
-      if (!cells.length) return;
+    // Coldest first, so warmer bands' strokes sit on top.
+    for (let i = HEAT_BANDS.length - 1; i >= 0; i--) {
+      if (!bands[i].length) continue;
       const b = HEAT_BANDS[i];
-      L.polygon(h3.cellsToMultiPolygon(cells, false), {
-        pane: 'visited', color: b.color, weight: 1.5, opacity: 0.9,
+      hexLayer(bands[i], {
+        pane: 'visited', color: b.stroke, weight: 1.3, opacity: 1,
         fillColor: b.color, fillOpacity: b.fill, interactive: false,
       }).addTo(visitedLayer);
-    });
+    }
 
     walkLayer.clearLayers();
     if (drawWalk.length) {
-      L.polygon(h3.cellsToMultiPolygon(drawWalk, false), {
-        pane: 'walk', color: COLORS.walk, weight: 2.5, opacity: 1,
-        fillColor: COLORS.walk, fillOpacity: 0.35, interactive: false,
+      hexLayer(drawWalk, {
+        pane: 'walk', color: COLORS.walkStroke, weight: 2.4, opacity: 1,
+        fillColor: COLORS.walk, fillOpacity: 0.8, interactive: false,
       }).addTo(walkLayer);
     }
 
-    // Grid of the viewport + "% of view explored".
+    // Unexplored grid of the viewport: thin and dark on street maps, white on satellite.
     gridLayer.clearLayers();
-    let viewPct = null;
-    if (estimatedCellsInView(res, 0.1) <= MAX_VIEW_CELLS) {
+    if (settings.grid && map.getZoom() >= 12 && estimatedCellsInView(res, 0.1) <= MAX_VIEW_CELLS) {
       let cells = [];
       try {
         cells = h3.polygonToCells(viewPolygon(0.1), res, false);
       } catch (e) {
         cells = [];
       }
-      if (cells.length) {
-        const vb = map.getBounds();
-        let total = 0;
-        let seen = 0;
-        for (const c of cells) {
-          const [lat, lng] = h3.cellToLatLng(c);
-          if (!vb.contains([lat, lng])) continue;
-          total++;
-          if (display.has(c)) seen++;
-        }
-        if (total) viewPct = (seen / total) * 100;
-
-        if (settings.grid && map.getZoom() >= 12) {
-          const rings = [];
-          for (const c of cells) {
-            if (display.has(c)) continue;
-            const ring = h3.cellToBoundary(c);
-            ring.push(ring[0]);
-            rings.push(ring);
-          }
-          L.polyline(rings, {
-            pane: 'grid', color: COLORS.grid, weight: 0.7, opacity: 0.28, interactive: false,
-          }).addTo(gridLayer);
-        }
+      const rings = [];
+      for (const c of cells) {
+        if (display.has(c) || walkDisplay.has(c)) continue;
+        const ring = h3.cellToBoundary(c);
+        ring.push(ring[0]);
+        rings.push(ring);
+      }
+      if (rings.length) {
+        const sat = settings.basemap === 'satellite';
+        L.polyline(rings, {
+          pane: 'grid', color: sat ? '#FFFFFF' : COLORS.grid, weight: 0.8, opacity: sat ? 0.35 : 0.28, interactive: false,
+        }).addTo(gridLayer);
       }
     }
 
-    // Stats
+    // Stats card
     let km2 = 0;
-    for (const c of visited.keys()) km2 += cellAreaCached(c);
+    const bandCount = HEAT_BANDS.map(() => 0);
+    for (const c of visited.keys()) {
+      km2 += cellAreaCached(c);
+      bandCount[heatBand(cellHeat(c, now))]++;
+    }
     $('statCells').textContent = display.size.toLocaleString();
     $('statScore').textContent = Math.round(hexScoreTotal(now)).toLocaleString();
-    $('statArea').textContent = formatNum(km2);
-    $('statView').textContent = viewPct === null ? '–' : (viewPct < 10 && viewPct > 0 ? viewPct.toFixed(1) : Math.round(viewPct)) + '%';
+    $('statArea').textContent = km2 >= 10 ? Math.round(km2).toLocaleString() : km2.toFixed(1);
+    const total = display.size || 1;
+    $('warmthBar').replaceChildren(...bandCount.map((n, i) => {
+      if (!n) return null;
+      const seg = document.createElement('span');
+      seg.style.background = HEAT_BANDS[i].color;
+      seg.style.flex = String(n);
+      return seg;
+    }).filter(Boolean));
+    const warm = bandCount[0] + bandCount[1] + bandCount[2];
+    $('warmthPct').textContent = `${Math.round((warm / total) * 100)}% warm`;
     if (walk) {
-      $('statWalkNew').textContent = walkDisplay.size.toLocaleString();
-      $('statWalkDist').textContent = (walk.km + walk.pending.reduce((a, p) => a + p.km, 0)).toFixed(2);
+      const pendingKm = walk.pending.reduce((a, p) => a + p.km, 0);
+      $('statWalkNew').textContent = '+' + walkNewCount().toLocaleString();
+      $('statWalkDist').textContent = (walk.km + pendingKm).toFixed(2);
     }
 
     updateHereHex();
+    updateCard();
     emit('render', { display });
+  }
+
+  /** New hexes on the walk so far (committed and pending). */
+  function walkNewCount() {
+    if (!walk) return 0;
+    const n = new Set(walk.newCells);
+    for (const p of walk.pending) for (const c of p.cells) if (!visited.has(c)) n.add(c);
+    return n.size;
   }
 
   const areaCache = new Map();
@@ -449,9 +492,7 @@
       if (err) {
         if (err.code === 'NOT_AUTHORIZED') {
           stopWalk();
-          if (confirm('Scoop needs location permission to record walks. Open settings?')) {
-            BackgroundGeolocation.openSettings();
-          }
+          showOnboarding('denied');
         }
         return;
       }
@@ -475,9 +516,9 @@
 
   function onGeoError(err) {
     if (err.code === err.PERMISSION_DENIED) {
-      toast('Location permission denied — enable it in your browser settings', 4000);
-      if (walk && !isNative) stopWalk();
+      if (walk && !isNative) stopWalk(true);
       stopWebWatch();
+      showOnboarding('denied');
     } else if (walk && (!lastPos || Date.now() - lastPos.time > 15000)) {
       toast('Still looking for GPS…');
     }
@@ -487,6 +528,7 @@
     const { latitude: lat, longitude: lng, accuracy, speed } = pos.coords;
     const here = L.latLng(lat, lng);
     lastPos = { latlng: here, accuracy, time: pos.timestamp };
+    document.body.classList.add('has-fix');
 
     accuracyCircle.setLatLng(here).setRadius(accuracy);
     youMarker.setLatLng(here);
@@ -502,6 +544,7 @@
     updateHereHex();
 
     if (walk) recordFix(here, accuracy, pos.timestamp, speed);
+    updateCard();
   }
 
   /** Best guess at current speed in m/s, or null if not enough data yet. */
@@ -515,7 +558,7 @@
 
   function setMoving(moving) {
     walk.moving = moving;
-    document.body.classList.toggle('too-fast', moving);
+    if (!walk.replay && !moving) toast('Walking pace again · recording');
   }
 
   /** Commit pending cells recorded before `cutoff` (all of them by default). */
@@ -527,10 +570,20 @@
     }
   }
 
+  let weakGpsToastAt = 0;
   function recordFix(here, accuracy, time, reportedSpeed) {
+    walk.lastAcc = accuracy;
     if (accuracy > settings.accuracy) {
-      toast(`Waiting for better GPS (±${Math.round(accuracy)} m)`);
+      if (!walk.armed) walk.gpsOk = false;
+      else if (!walk.replay && Date.now() - weakGpsToastAt > 20000) {
+        weakGpsToastAt = Date.now();
+        toast(`Weak GPS (±${Math.round(accuracy)} m) · waiting`);
+      }
       return;
+    }
+    if (!walk.gpsOk) {
+      walk.gpsOk = true;
+      if (!walk.replay && !walk.armed) toast(`Hexes count once you're ${START_METERS} m away`);
     }
     walk.history.push({ latlng: here, time });
     while (walk.history.length && time - walk.history[0].time > SPEED_WINDOW_MS * 2) walk.history.shift();
@@ -600,6 +653,7 @@
     // walked 100 m from there. That stretch still counts towards distance.
     if (!walk.armed) {
       if (!walk.origin) walk.origin = here;
+      walk.lastPoint = here;
       if (haversine(walk.origin, here) < START_METERS) return;
       walk.armed = true;
       walk.lastFix = { latlng: walk.origin, time };
@@ -623,18 +677,67 @@
     walk.lastFix = { latlng: here, time };
   }
 
+  /** While walking, the hex you're standing in gets a dashed outline. */
   function updateHereHex() {
-    if (!lastPos) return;
+    const waiting = walkPhase() === 'gps';
+    youMarker.setStyle({ fillColor: waiting ? COLORS.hereWaiting : COLORS.here });
+    if (!lastPos || !walk) {
+      if (hereHex) { hereLayer.removeLayer(hereHex); hereHex = null; }
+      return;
+    }
     const cell = h3.latLngToCell(lastPos.latlng.lat, lastPos.latlng.lng, BASE_RES);
     if (hereHex && hereHex._cell === cell) return;
     if (hereHex) hereLayer.removeLayer(hereHex);
     hereHex = L.polygon(h3.cellToBoundary(cell), {
-      pane: 'here', color: COLORS.here, weight: 2.5, dashArray: '6 4', fill: false, interactive: false,
+      pane: 'here', color: COLORS.here, weight: 1.6, dashArray: '4 3', fill: false, interactive: false,
     }).addTo(hereLayer);
     hereHex._cell = cell;
   }
 
   map.on('dragstart', () => { follow = false; });
+
+  // ---------- walk phases and the stats card ----------
+
+  /** idle | empty | gps | warm | rec | paused */
+  function walkPhase() {
+    if (!walk) return visited.size ? 'idle' : 'empty';
+    if (walk.moving) return 'paused';
+    if (walk.armed) return 'rec';
+    return walk.gpsOk ? 'warm' : 'gps';
+  }
+
+  const clock = (ms) => {
+    const sec = Math.max(0, Math.floor(ms / 1000));
+    const h = Math.floor(sec / 3600);
+    const m = Math.floor((sec % 3600) / 60);
+    const s = String(sec % 60).padStart(2, '0');
+    return h ? `${h}:${String(m).padStart(2, '0')}:${s}` : `${m}:${s}`;
+  };
+
+  function updateCard() {
+    const phase = walkPhase();
+    document.body.dataset.phase = phase;
+    if (!walk) return;
+    const now = Date.now();
+    for (const el of document.querySelectorAll('[data-timer]')) el.textContent = clock(now - walk.start);
+    if (phase === 'gps') {
+      $('gpsAcc').textContent = walk.lastAcc ? `±${Math.round(walk.lastAcc)} m` : '±– m';
+      $('gpsNeed').textContent = `needs ±${settings.accuracy} m`;
+    } else if (phase === 'warm') {
+      const from = walk.origin && (walk.lastPoint || (lastPos && lastPos.latlng));
+      const done = from ? Math.min(START_METERS, haversine(walk.origin, from)) : 0;
+      $('warmToGo').textContent = `${Math.max(0, Math.round(START_METERS - done))} m`;
+      $('warmBar').style.width = `${(done / START_METERS) * 100}%`;
+    } else if (phase === 'paused') {
+      const left = walk.slowSince === null ? SLOW_MS_TO_RESUME : SLOW_MS_TO_RESUME - (now - walk.slowSince);
+      $('pauseLeft').textContent = clock(left);
+      const n = walkNewCount();
+      $('pauseNote').textContent = `Recording picks up again after a minute at walking speed. ` +
+        (n ? `Your ${n.toLocaleString()} new hex${n === 1 ? ' is' : 'es are'} safe.` : 'Nothing you walked is lost.');
+    }
+  }
+
+  let ticker = null;
 
   // ---------- wake lock ----------
 
@@ -663,7 +766,7 @@
     return {
       start, km: 0, newCells: new Set(), cells: new Map(), lastCell: null, lastFix: null,
       history: [], pending: [], moving: false, fastCount: 0, fastSince: 0, slowSince: null, slowFixes: [],
-      origin: null, armed: false, replay,
+      origin: null, armed: false, replay, gpsOk: replay, lastAcc: null, lastPoint: null,
     };
   }
 
@@ -692,8 +795,25 @@
     document.dispatchEvent(new CustomEvent('scoop:' + name, { detail }));
   }
 
+  /** Badges your walks earn on this device, plus any the server awarded. */
+  let serverBadges = new Map();
+  function earnedBadges() {
+    let maxVisits = 0;
+    for (const c of visited.keys()) maxVisits = Math.max(maxVisits, visitCount(c));
+    const local = core.localBadges({
+      walks: walks.length,
+      hexes: visited.size,
+      km: walks.reduce((a, w) => a + (w.km || 0), 0),
+      longestStreak: core.streaks(walks.map((w) => w.start)).longest,
+      maxVisits,
+    });
+    for (const k of serverBadges.keys()) local.add(k);
+    return local;
+  }
+
   function startWalk() {
     if (!isNative && !ensureWatching()) return;
+    closeSheet();
     walk = newWalk(Date.now());
     follow = true;
     pendingCenter = !lastPos;
@@ -707,22 +827,26 @@
     }
     if (lastPos) {
       map.setView(lastPos.latlng, Math.max(map.getZoom(), 16));
-      recordFix(lastPos.latlng, lastPos.accuracy, Date.now(), null);
+      if (Date.now() - lastPos.time < 30000) recordFix(lastPos.latlng, lastPos.accuracy, Date.now(), null);
     }
-    toast((isNative ? 'Walk started — you can lock your phone.' : 'Walk started — keep this screen open.') +
-      ` Hexes count once you're ${START_METERS} m away.`, 4000);
+    if (isNative) toast('Walk started · you can lock your phone');
+    clearInterval(ticker);
+    ticker = setInterval(updateCard, 1000);
     scheduleRender();
+    updateCard();
   }
 
-  function stopWalk() {
+  function stopWalk(silent = false) {
     if (!walk) return;
     if (!walk.moving) commitPending();
-    document.body.classList.remove('too-fast');
+    const badgesBefore = earnedBadges();
     const summary = { start: walk.start, end: Date.now(), km: +walk.km.toFixed(3), newCells: walk.newCells.size };
+    const warmed = [...walk.cells.keys()].filter((c) => !walk.newCells.has(c)).length;
     summary.points = countVisits();
-    if (summary.km > 0 || summary.newCells > 0 || summary.points > 0) walks.push(summary);
-    const newDisplay = summary.newCells;
+    const saved = summary.km > 0 || summary.newCells > 0 || summary.points > 0;
+    if (saved) walks.push(summary);
     walk = null;
+    clearInterval(ticker);
     saveNow();
     emit('changed', { walk: summary });
     document.body.classList.remove('walking');
@@ -733,14 +857,40 @@
       stopNativeWatcher();
       ensureWatching();
     }
-    toast(`Walk saved: ${summary.km.toFixed(2)} km, ${newDisplay} new hex${newDisplay === 1 ? '' : 'es'}, ` +
-      `+${Math.round(summary.points)} pts`, 4000);
-    scheduleRender();
+    render();
+    if (silent) return;
+    if (!saved) {
+      toast(`Nothing recorded · hexes count once you're ${START_METERS} m away`, 3500);
+      return;
+    }
+    const fresh = [...earnedBadges()].filter((k) => !badgesBefore.has(k));
+    showSummary(summary, warmed, fresh);
   }
 
-  $('btnWalk').addEventListener('click', () => (walk ? stopWalk() : startWalk()));
+  function showSummary(w, warmed, freshBadges) {
+    const dur = clock(w.end - w.start);
+    const when = new Date(w.end).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+    const row = (sw, label, value) => el('div', { class: 'sum-row' }, el('span', {}, sw, label), el('b', {}, value));
+    const badge = freshBadges.length ? core.BADGES[freshBadges[0]] : null;
+    fillEl($('summaryBody'),
+      el('div', { class: 'stack' },
+        el('div', { class: 'summary-top' },
+          el('div', { class: 'stack tight', style: 'gap:2px' },
+            el('span', { class: 'when' }, `Walk saved · ${when}`),
+            el('span', { class: 'summary-km' }, w.km.toFixed(2), el('small', {}, 'km'))),
+          el('span', { class: 'pill' }, `+${Math.round(w.points).toLocaleString()} pts`)),
+        el('div', { class: 'sum-rows' },
+          row(el('span', { class: 'hex-sw', style: `background:${HEAT_BANDS[0].color}` }), 'New hexes', w.newCells.toLocaleString()),
+          row(el('span', { class: 'hex-sw', style: `background:${HEAT_BANDS[2].color}` }), 'Warmed back up', warmed.toLocaleString()),
+          row(el('span', { class: 'ring-sw' }), 'Time', dur)),
+        badge ? el('div', { class: 'new-badge' },
+          el('div', { class: 'hex-badge hot' }, badge.glyph),
+          el('div', {}, el('b', {}, `New badge: ${badge.label}`), el('small', {}, badge.desc))) : null,
+        el('button', { class: 'btn', onclick: closeSheet }, 'Done')));
+    openSheet('summarySheet');
+  }
 
-  $('btnLocate').addEventListener('click', () => {
+  function locate() {
     follow = true;
     if (lastPos) {
       map.setView(lastPos.latlng, Math.max(map.getZoom(), 16));
@@ -748,61 +898,158 @@
       pendingCenter = true;
       toast('Finding you…');
     }
-  });
+  }
 
-  // ---------- menu / settings ----------
+  $('btnWalk').addEventListener('click', () => (walk ? stopWalk() : startWalk()));
+  $('btnLocate').addEventListener('click', locate);
+  $('btnLocateWalk').addEventListener('click', locate);
 
-  function openSheet(id = 'sheet') {
-    closeSheet();
-    $(id).hidden = false;
-    $('sheetBackdrop').hidden = false;
+  // ---------- small DOM helpers ----------
+
+  /** Build an element. Children are appended as text unless they're nodes. */
+  function el(tag, props, ...kids) {
+    const node = document.createElement(tag);
+    for (const [k, v] of Object.entries(props || {})) {
+      if (v === undefined || v === null || v === false) continue;
+      if (k.startsWith('on')) node.addEventListener(k.slice(2), v);
+      else if (k === 'class') node.className = v;
+      else if (k in node && typeof v !== 'string') node[k] = v;
+      else node.setAttribute(k, v === true ? '' : v);
+    }
+    for (const kid of kids.flat(Infinity)) {
+      if (kid === null || kid === undefined || kid === false) continue;
+      node.append(kid instanceof Node ? kid : String(kid));
+    }
+    return node;
+  }
+
+  function fillEl(node, ...kids) {
+    node.replaceChildren(...kids.flat(Infinity).filter((k) => k !== null && k !== undefined && k !== false));
+  }
+
+  /** Segmented control: options are [value, label] pairs. */
+  function segmented(node, options, value, onPick) {
+    node.setAttribute('role', 'radiogroup');
+    fillEl(node, options.map(([v, label]) => el('button', {
+      type: 'button', role: 'radio', 'aria-checked': String(v === value),
+      onclick: (e) => {
+        for (const b of node.children) b.setAttribute('aria-checked', String(b === e.currentTarget));
+        onPick(v);
+      },
+    }, label)));
+    return node;
+  }
+
+  // ---------- sheets ----------
+
+  let sheetTimer = null;
+  let currentSheet = null;
+  function openSheet(id) {
+    clearTimeout(sheetTimer);
+    for (const s of document.querySelectorAll('.sheet')) {
+      if (s.id === id) continue;
+      s.classList.remove('open');
+      s.hidden = true;
+    }
+    const sheet = $(id);
+    sheet.hidden = false;
+    sheet.scrollTop = 0;
+    void sheet.offsetHeight; // start the slide from below
+    sheet.classList.add('open');
+    document.body.classList.add('sheet-open');
+    currentSheet = id;
   }
   function closeSheet() {
-    for (const el of document.querySelectorAll('.sheet')) el.hidden = true;
-    $('sheetBackdrop').hidden = true;
+    const open = document.querySelectorAll('.sheet.open');
+    if (!open.length) return;
+    for (const s of open) s.classList.remove('open');
+    document.body.classList.remove('sheet-open');
+    currentSheet = null;
+    clearTimeout(sheetTimer);
+    sheetTimer = setTimeout(() => {
+      for (const s of document.querySelectorAll('.sheet:not(.open)')) s.hidden = true;
+    }, 360);
   }
-  const anySheetOpen = () => !!document.querySelector('.sheet:not([hidden])');
-  $('btnMenu').addEventListener('click', () => openSheet());
-  $('btnClose').addEventListener('click', closeSheet);
-  $('sheetBackdrop').addEventListener('click', closeSheet);
-
-  $('chkGrid').checked = settings.grid;
-  $('selAccuracy').value = String(settings.accuracy);
-  $('selBasemap').value = BASEMAPS[settings.basemap] ? settings.basemap : 'osm';
-
-  $('selActivity').value = SPEED_LIMITS[settings.activity] ? settings.activity : 'walk';
-  $('selActivity').addEventListener('change', (e) => {
-    settings.activity = e.target.value;
-    saveSettings();
+  const anySheetOpen = () => !!currentSheet;
+  $('scrim').addEventListener('click', closeSheet);
+  document.addEventListener('click', (e) => {
+    if (e.target.closest('[data-close]')) closeSheet();
   });
 
-  $('selBasemap').addEventListener('change', (e) => {
-    settings.basemap = e.target.value;
-    saveSettings();
-    setBasemap(settings.basemap);
-  });
+  // ---------- dialog (destructive actions) ----------
 
-  $('chkGrid').addEventListener('change', (e) => {
-    settings.grid = e.target.checked;
-    saveSettings();
-    render();
-  });
-  $('selAccuracy').addEventListener('change', (e) => {
-    settings.accuracy = Number(e.target.value);
-    saveSettings();
-  });
+  let dialogDone = null;
+  /**
+   * Centred confirmation for destructive actions. Resolves 'confirm', 'extra'
+   * (the optional safer action, e.g. export first) or null when cancelled.
+   */
+  function confirmDialog({ title, body, confirm, extra }) {
+    if (dialogDone) dialogDone(null);
+    $('dialogTitle').textContent = title;
+    $('dialogBody').textContent = body;
+    return new Promise((resolve) => {
+      const finish = (v) => {
+        dialogDone = null;
+        $('dialog').hidden = true;
+        resolve(v);
+      };
+      dialogDone = finish;
+      fillEl($('dialogActions'),
+        extra ? el('button', { class: 'btn outline', onclick: () => finish('extra') }, extra) : null,
+        el('button', { class: 'btn danger', onclick: () => finish('confirm') }, confirm),
+        el('button', { class: 'btn ghost', onclick: () => finish(null) }, 'Cancel'));
+      $('dialog').hidden = false;
+      $('dialogActions').lastChild.focus();
+    });
+  }
+  $('dialog').querySelector('[data-cancel]').addEventListener('click', () => dialogDone && dialogDone(null));
+
+  // ---------- Me ----------
+
+  const identity = { initial: '·', name: 'Your map', sub: 'Everything stays on this phone' };
+  function setIdentity(next) {
+    Object.assign(identity, next);
+    $('meInitial').textContent = identity.initial;
+    $('meAvatar').textContent = identity.initial;
+    $('meName').textContent = identity.name;
+    $('meSub').textContent = identity.sub;
+  }
+  setIdentity({});
+
+  function renderBadges() {
+    const earned = earnedBadges();
+    const all = Object.entries(core.BADGES);
+    $('badgeLabel').textContent = `Badges · ${earned.size} of ${all.length}`;
+    fillEl($('badgeGrid'), all.map(([key, b]) => el('div', {
+      class: earned.has(key) ? 'badge earned' : 'badge',
+      title: `${b.label}: ${b.desc}` + (serverBadges.has(key) ? ` · earned ${new Date(serverBadges.get(key)).toLocaleDateString()}` : ''),
+    }, el('div', { class: 'hex' }, b.glyph), el('span', { class: 'name' }, b.label))));
+  }
+
+  function openMe() {
+    const streak = core.streaks(walks.map((w) => w.start));
+    $('meScore').textContent = Math.round(hexScoreTotal()).toLocaleString();
+    $('meStreak').textContent = String(streak.current);
+    $('meBest').textContent = String(streak.longest);
+    renderTrends();
+    renderBadges();
+    emit('me-open', {});
+    openSheet('meSheet');
+  }
+  $('btnMe').addEventListener('click', openMe);
+  $('btnSettings').addEventListener('click', () => openSettings());
 
   // ---------- trends (private: worked out on the device) ----------
 
   const TREND_UNITS = {
-    day: { count: 14, now: 'Today', prev: 'yesterday' },
-    week: { count: 12, now: 'This week', prev: 'last week' },
-    month: { count: 12, now: 'This month', prev: 'last month' },
+    day: { count: 14, now: 'Today', prev: 'yesterday', adj: 'daily', span: '14 days' },
+    week: { count: 12, now: 'This week', prev: 'last week', adj: 'weekly', span: '12 weeks' },
+    month: { count: 12, now: 'This month', prev: 'last month', adj: 'monthly', span: '12 months' },
   };
   const TREND_METRICS = {
-    hexes: { say: (n) => `${Math.round(n).toLocaleString()} new hex${Math.round(n) === 1 ? '' : 'es'}`, short: (n) => String(Math.round(n)) },
-    points: { say: (n) => `${Math.round(n).toLocaleString()} pts`, short: (n) => String(Math.round(n)) },
-    km: { say: (n) => `${n.toFixed(n >= 10 ? 0 : 1)} km`, short: (n) => n.toFixed(n >= 10 ? 0 : 1) },
+    hexes: { title: 'New hexes', say: (n) => `${Math.round(n).toLocaleString()} new hex${Math.round(n) === 1 ? '' : 'es'}` },
+    points: { title: 'Points', say: (n) => `${Math.round(n).toLocaleString()} pts` },
+    km: { title: 'Distance', say: (n) => `${n.toFixed(n >= 10 ? 0 : 1)} km` },
   };
   const trendPrefs = Object.assign({ unit: 'week', metric: 'hexes' }, loadJSON('scoop.trends.v1', {}));
 
@@ -820,62 +1067,36 @@
     return d.toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
   }
 
-  function axisLabel(start, unit) {
-    const d = new Date(start);
-    if (unit === 'month') return d.toLocaleDateString(undefined, { month: 'short' });
-    return String(d.getDate());
-  }
-
   function renderTrends() {
     const { unit, metric } = trendPrefs;
     const fmt = TREND_METRICS[metric];
-    const buckets = core.trendBuckets(trendEvents(metric), unit, TREND_UNITS[unit].count);
+    const U = TREND_UNITS[unit];
+    $('trendTitle').textContent = `${fmt.title} · ${U.adj}`;
+    $('trendSpan').textContent = U.span;
+    const buckets = core.trendBuckets(trendEvents(metric), unit, U.count);
     const last = buckets.length - 1;
     const max = Math.max(...buckets.map((b) => b.value), 0);
     const peak = buckets.findIndex((b) => b.value === max && max > 0);
     const readout = $('trendReadout');
-    const showDefault = () => {
-      const prev = buckets[last - 1].value;
-      readout.textContent = `${TREND_UNITS[unit].now}: ${fmt.say(buckets[last].value)} · ${fmt.say(prev)} ${TREND_UNITS[unit].prev}`;
-    };
     const chart = $('trendChart');
-    chart.replaceChildren(...buckets.map((b, i) => {
-      const col = document.createElement('button');
-      col.type = 'button';
-      col.className = 'col';
-      const name = periodName(b.start, unit, i, last);
-      col.setAttribute('aria-label', `${name}: ${fmt.say(b.value)}`);
-      const show = () => {
-        for (const el of chart.children) el.setAttribute('aria-pressed', String(el === col));
-        readout.textContent = `${name}: ${fmt.say(b.value)}`;
-      };
-      col.addEventListener('mouseenter', show);
-      col.addEventListener('focus', show);
-      col.addEventListener('click', show);
-      if (i === peak) {
-        const tip = document.createElement('span');
-        tip.className = 'tip';
-        tip.textContent = fmt.short(b.value);
-        col.append(tip);
-      }
-      const bar = document.createElement('span');
-      bar.className = b.value > 0 ? 'bar' : 'bar zero';
-      if (b.value > 0) bar.style.height = `${Math.max(2, (b.value / max) * 85)}%`;
-      const lbl = document.createElement('span');
-      lbl.className = 'lbl';
-      lbl.textContent = axisLabel(b.start, unit);
-      col.append(bar, lbl);
-      return col;
-    }));
-    chart.onmouseleave = () => {
-      for (const el of chart.children) el.removeAttribute('aria-pressed');
-      showDefault();
+    const select = (i) => {
+      [...chart.children].forEach((c, k) => c.setAttribute('aria-pressed', String(k === i)));
+      readout.textContent = i === last
+        ? `${U.now}: ${fmt.say(buckets[last].value)} · ${fmt.say(buckets[last - 1].value)} ${U.prev}`
+        : `${periodName(buckets[i].start, unit, i, last)}: ${fmt.say(buckets[i].value)}`;
     };
-    showDefault();
+    fillEl(chart, buckets.map((b, i) => el('button', {
+      type: 'button',
+      'aria-label': `${periodName(b.start, unit, i, last)}: ${fmt.say(b.value)}`,
+      onclick: () => select(i),
+    }, el('span', {
+      class: b.value > 0 ? 'bar' : 'bar zero',
+      style: b.value > 0 ? `height:${Math.max(4, (b.value / max) * 100)}%` : null,
+    }))));
+    select(last);
 
     const total = buckets.reduce((a, b) => a + b.value, 0);
-    const span = { day: 'days', week: 'weeks', month: 'months' }[unit];
-    let summary = `Last ${buckets.length} ${span}: ${fmt.say(total)}`;
+    let summary = `Last ${U.span}: ${fmt.say(total)}`;
     if (peak >= 0) summary += ` · best: ${periodName(buckets[peak].start, unit, peak, -1)} (${fmt.say(max)})`;
     if (metric === 'points' && walks.some((w) => typeof w.points !== 'number')) {
       summary += '. Points are counted for walks recorded since scores started fading.';
@@ -883,23 +1104,57 @@
     $('trendSummary').textContent = summary;
   }
 
-  $('selTrendMetric').value = trendPrefs.metric;
-  $('selTrendUnit').value = trendPrefs.unit;
-  for (const [id, key] of [['selTrendMetric', 'metric'], ['selTrendUnit', 'unit']]) {
-    $(id).addEventListener('change', (e) => {
-      trendPrefs[key] = e.target.value;
-      saveJSON('scoop.trends.v1', trendPrefs);
-      renderTrends();
-    });
-  }
-  $('btnTrends').addEventListener('click', () => {
+  function saveTrendPrefs() {
+    saveJSON('scoop.trends.v1', trendPrefs);
     renderTrends();
-    openSheet('trendsSheet');
+  }
+  segmented($('segTrendMetric'), [['hexes', 'Hexes'], ['points', 'Points'], ['km', 'Km']], trendPrefs.metric,
+    (v) => { trendPrefs.metric = v; saveTrendPrefs(); });
+  segmented($('segTrendUnit'), [['day', 'Day'], ['week', 'Week'], ['month', 'Month']], trendPrefs.unit,
+    (v) => { trendPrefs.unit = v; saveTrendPrefs(); });
+
+  // ---------- settings ----------
+
+  function openSettings() {
+    emit('settings-open', {});
+    openSheet('settingsSheet');
+  }
+
+  fillEl($('heatLegend'), HEAT_BANDS.map((b) => el('div', {},
+    el('div', { class: 'heat-hex', style: `background:${b.stroke}` }, el('i', { style: `background:${b.color}` })),
+    b.name)));
+
+  if (!BASEMAPS[settings.basemap]) settings.basemap = 'osm';
+  segmented($('segBasemap'), Object.entries(BASEMAPS).map(([k, b]) => [k, b.label]), settings.basemap, (v) => {
+    settings.basemap = v;
+    saveSettings();
+    setBasemap(v);
+    render();
   });
-  $('btnTrendsClose').addEventListener('click', closeSheet);
+
+  const gridBtn = $('btnGrid');
+  gridBtn.setAttribute('aria-checked', String(!!settings.grid));
+  gridBtn.addEventListener('click', () => {
+    settings.grid = !settings.grid;
+    gridBtn.setAttribute('aria-checked', String(settings.grid));
+    saveSettings();
+    render();
+  });
+
+  if (!SPEED_LIMITS[settings.activity]) settings.activity = 'walk';
+  segmented($('segActivity'), [['walk', 'Walking · 9 km/h'], ['run', 'Walk + run · 16 km/h']], settings.activity, (v) => {
+    settings.activity = v;
+    saveSettings();
+  });
+
+  segmented($('segAccuracy'), [25, 40, 75, 150].map((m) => [m, `${m} m`]), Number(settings.accuracy), (v) => {
+    settings.accuracy = v;
+    saveSettings();
+    updateCard();
+  });
 
   // Backup
-  $('btnExport').addEventListener('click', async () => {
+  async function exportBackup() {
     saveNow();
     const data = { app: 'scoop', version: 1, exported: new Date().toISOString(), baseRes: BASE_RES, ...snapshot() };
     const name = `scoop-backup-${new Date().toISOString().slice(0, 10)}.json`;
@@ -924,7 +1179,9 @@
     a.click();
     a.remove();
     setTimeout(() => URL.revokeObjectURL(a.href), 1000);
-  });
+    toast('Backup saved to Downloads');
+  }
+  $('btnExport').addEventListener('click', exportBackup);
 
   $('btnImport').addEventListener('click', () => $('fileJson').click());
   $('fileJson').addEventListener('change', async (e) => {
@@ -954,8 +1211,8 @@
       saveNow();
       render();
       emit('changed', {});
-      toast(`Restored — ${added.toLocaleString()} new cells merged`);
       closeSheet();
+      toast(`Restored · ${added.toLocaleString()} new hexes merged, nothing deleted`);
     } catch (err) {
       toast('Could not read that file: ' + err.message, 4000);
     }
@@ -970,7 +1227,6 @@
     // Re-importing the same file shouldn't count as walking there again.
     result.points = countVisits(!walks.some((w) => w.start === result.start));
     walk = null;
-    document.body.classList.remove('too-fast');
     return result;
   }
 
@@ -985,6 +1241,7 @@
     e.target.value = '';
     let added = 0;
     let km = 0;
+    let count = 0;
     const bounds = L.latLngBounds([]);
     for (const file of files) {
       try {
@@ -1007,7 +1264,10 @@
           const result = replayTrack(points);
           added += result.newCells;
           km += result.km;
-          if (result.km > 0 && !walks.some((w) => w.start === result.start)) walks.push(result);
+          if (result.km > 0 && !walks.some((w) => w.start === result.start)) {
+            walks.push(result);
+            count++;
+          }
         }
       } catch (err) {
         toast(`Skipped ${file.name}: ${err.message}`, 4000);
@@ -1020,22 +1280,95 @@
       closeSheet();
       map.fitBounds(bounds, { padding: [40, 40] });
       emit('changed', {});
-      toast(`Imported ${km.toFixed(2)} km of walking — ${added.toLocaleString()} new cells`, 4000);
+      toast(`Imported ${count} walk${count === 1 ? '' : 's'} · ${km.toFixed(1)} km · ${added.toLocaleString()} new hexes`, 4000);
     }
   });
 
-  $('btnClear').addEventListener('click', () => {
-    if (!confirm('Erase every visited hex and walk on this device? This cannot be undone.')) return;
+  $('btnClear').addEventListener('click', async () => {
+    const n = visited.size;
+    const choice = await confirmDialog({
+      title: 'Clear everything?',
+      body: `This deletes your ${n.toLocaleString()} hex${n === 1 ? '' : 'es'}, walks, trends and privacy zones from this phone. It can't be undone.`,
+      extra: 'Export a backup first',
+      confirm: 'Clear everything',
+    });
+    if (choice === 'extra') return exportBackup();
+    if (choice !== 'confirm') return;
     visited.clear();
     visits.clear();
     lastSeen.clear();
     walks.length = 0;
-    if (walk) { walk.newCells.clear(); walk.pending = []; }
+    if (walk) { walk.newCells.clear(); walk.cells.clear(); walk.pending = []; }
     saveNow();
+    emit('cleared', {});
     render();
     closeSheet();
     toast('All cleared');
   });
+
+  // ---------- onboarding (first launch) ----------
+
+  const ONBOARDED_KEY = 'scoop.onboarded.v1';
+  const ONB = [
+    { t: 'Explore your city on foot, one hexagon at a time', b: 'Every street-sized hex you walk through lights up on your map.', p: 'Next', hexes: 'walk' },
+    { t: 'Warm means recent', b: "Hexes you just walked glow ember. Over the weeks they cool — walk them again to warm them up. They're never lost.", p: 'Next', hexes: 'heat' },
+    { t: 'Private by default', b: 'Your map lives on this phone. Scoop never draws or uploads your routes. Friends are optional.', p: 'Next' },
+    { t: 'Scoop needs your location while you walk', b: "It's only used to light up hexes. Nothing leaves your phone unless you sign in.", p: 'Allow location', s: 'Not now' },
+  ];
+  const DENIED = {
+    t: 'Location is off',
+    b: isNative
+      ? "Scoop can't light up hexes without it. Turn it on in Settings → Apps → Scoop → Location, then come back."
+      : "Scoop can't light up hexes without it. Allow location for this site in your browser settings, then come back.",
+    p: 'Try again', s: 'Look around the map',
+  };
+
+  function hideOnboarding() {
+    $('onboard').hidden = true;
+  }
+
+  function requestLocation() {
+    hideOnboarding();
+    pendingCenter = true;
+    stopWebWatch();
+    ensureWatching();
+  }
+
+  function showOnboarding(step) {
+    const ob = step === 'denied' ? DENIED : ONB[step];
+    const onbHex = (fill, stroke) => el('div', { class: 'onb-hex', style: `background:${stroke}` }, el('i', { style: `background:${fill}` }));
+    let hexes = null;
+    if (ob.hexes === 'walk') {
+      hexes = el('div', { class: 'onb-hexes' },
+        onbHex(COLORS.walk, COLORS.walkStroke), onbHex(COLORS.walk, COLORS.walkStroke),
+        onbHex(HEAT_BANDS[0].color, HEAT_BANDS[0].stroke),
+        onbHex('var(--surface)', HEAT_BANDS[4].color), onbHex('var(--surface)', HEAT_BANDS[4].color));
+    } else if (ob.hexes === 'heat') {
+      hexes = [el('div', { class: 'onb-hexes' }, HEAT_BANDS.map((b) => onbHex(b.color, b.stroke))),
+        el('div', { class: 'onb-scale' }, el('span', {}, 'Just walked'), el('span', {}, '100+ days'))];
+    }
+    const next = () => {
+      if (step === 'denied') return requestLocation();
+      if (step < ONB.length - 1) return showOnboarding(step + 1);
+      saveJSON(ONBOARDED_KEY, true);
+      requestLocation();
+    };
+    const skip = () => {
+      if (step === 'denied') return hideOnboarding();
+      saveJSON(ONBOARDED_KEY, true);
+      showOnboarding('denied');
+    };
+    fillEl($('onboardCard'),
+      hexes,
+      el('div', { class: 'onb-text' }, el('span', { class: 'onb-title' }, ob.t), el('span', { class: 'body' }, ob.b)),
+      el('div', { class: 'onb-actions' },
+        el('button', { class: 'btn', onclick: next }, ob.p),
+        ob.s ? el('button', { class: 'btn ghost', onclick: skip }, ob.s) : null),
+      step === 'denied' ? null : el('div', { class: 'dots', 'aria-hidden': 'true' },
+        ONB.map((_, i) => el('span', { class: i === step ? 'on' : '' }))));
+    closeSheet();
+    $('onboard').hidden = false;
+  }
 
   // ---------- boot ----------
 
@@ -1051,6 +1384,8 @@
     }).catch(() => {});
   }
 
+  if (!loadJSON(ONBOARDED_KEY, false) && !visited.size) showOnboarding(0);
+
   if (isNative) {
     $('walkTip').textContent = 'Walks keep recording with the screen off — look for the notification.';
   }
@@ -1059,10 +1394,17 @@
   // background (instead of quitting) so a walk in progress keeps recording.
   if (App) {
     App.addListener('backButton', () => {
-      if (anySheetOpen()) closeSheet();
+      if (dialogDone) dialogDone(null);
+      else if (anySheetOpen()) closeSheet();
+      else if (!$('onboard').hidden && $('onboardCard').querySelector('.dots') === null) hideOnboarding();
       else App.minimizeApp();
     });
   }
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape') return;
+    if (dialogDone) dialogDone(null);
+    else closeSheet();
+  });
 
   if (!isNative && 'serviceWorker' in navigator && location.protocol.startsWith('http')) {
     navigator.serviceWorker.register('sw.js').catch(() => {});
@@ -1070,11 +1412,14 @@
 
   // Used by social.js (community features) and handy for debugging from the console.
   window.scoop = {
-    BASE_RES, COLORS, map, visited, visits, visitCount, lastSeen, walks, settings, isNative, Filesystem, Share, App,
+    BASE_RES, COLORS, HEAT_BANDS, map, visited, visits, visitCount, lastSeen, walks, settings, isNative, Filesystem, Share, App,
     render, scheduleRender, toast, formatNum, cellAreaCached, haversine, openSheet, closeSheet, saveNow, emit,
-    hexScoreTotal,
+    hexScoreTotal, hexLayer, confirmDialog, segmented, el, fill: fillEl, setIdentity, openMe, openSettings,
+    startWalk, locate, earnedBadges, renderBadges,
+    setServerBadges: (m) => { serverBadges = m; },
     position: () => lastPos,
     walking: () => !!walk,
+    currentSheet: () => currentSheet,
   };
   emit('ready', window.scoop);
 })();

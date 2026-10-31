@@ -1,0 +1,62 @@
+/* Scoop · Ember & Nile — design tokens. Light is default outdoors; dark follows system. */
+:root {
+  /* Chrome */
+  --bg: #F5F0E8;
+  --surface: #FFFFFF;
+  --surface-2: #F3EDE3;
+  --chrome: #FFFFFFEB;          /* floating panels over the map (surface @ 92%) */
+  --ink: #1E1A16;
+  --muted: #6E655B;
+  --line: #E6DDD0;
+  --accent: #0B7A62;            /* Nile green: every primary action, "you" */
+  --on-accent: #FFFFFF;
+  --tint: #0B7A621A;            /* accent @ 10%: selected rows, "you" highlight */
+  --friend: #3355E0;
+  --stranger: var(--muted);
+  --success: #0B7A62;
+  --warning: #9A6414;
+  --warning-bg: #FFF6E6;
+  --danger: #C6352B;
+  --danger-tint: #C6352B1A;
+  --scrim: rgba(20,17,14,.32);
+
+  /* Map — heat (fill / stroke / fill-opacity), band 0 = just walked */
+  --heat-0: #E0301E; --heat-0-stroke: #9A1D0E; --heat-0-opacity: .72;
+  --heat-1: #EE6B2F; --heat-1-stroke: #B0441A; --heat-1-opacity: .62;
+  --heat-2: #F49E5E; --heat-2-stroke: #B26D33; --heat-2-opacity: .55;
+  --heat-3: #EBC8A2; --heat-3-stroke: #A68A6B; --heat-3-opacity: .50;
+  --heat-4: #C9BCAE; --heat-4-stroke: #857868; --heat-4-opacity: .48;
+  --heat-stroke-width: 1.3;
+
+  /* Map — other layers */
+  --walk: #19C29A; --walk-stroke: #053F33; --walk-opacity: .8; --walk-stroke-width: 2.4;
+  --friend-overlay: #3355E0; --friend-overlay-opacity: .14; --friend-overlay-stroke-width: 2.4;
+  --community: #8A4FC7;
+  --privacy: #5C6470; --privacy-stroke: #3A4048; --privacy-opacity: .12; /* dash 6 5 */
+  --grid: #1A1A1A; --grid-opacity: .28; --grid-width: .8;   /* on satellite: #FFFFFF @ .35 */
+  --location: #1E1A16;          /* dot r8 + 3px white ring; accuracy @ .10 fill */
+
+  /* Type */
+  --font-display: 'Bricolage Grotesque', system-ui, sans-serif;  /* numbers, titles, buttons */
+  --font-body: 'Instrument Sans', 'IBM Plex Sans Arabic', system-ui, sans-serif;
+
+  /* Radii */
+  --r-chip: 999px; --r-input: 14px; --r-tile: 16px; --r-card: 20px; --r-sheet: 26px; --r-dialog: 26px;
+  /* Elevation */
+  --shadow-float: 0 6px 20px rgba(0,0,0,.14);
+  --shadow-button: 0 4px 14px rgba(0,0,0,.16);
+  --shadow-primary: 0 8px 22px rgba(0,0,0,.22);
+  --shadow-sheet: 0 -10px 40px rgba(0,0,0,.2);
+  /* Motion */
+  --ease-sheet: cubic-bezier(.2,.8,.2,1);
+  --dur-sheet: 340ms; --dur-hex-in: 550ms; --dur-toast: 300ms;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #14110E; --surface: #1F1B17; --surface-2: #2A251F; --chrome: #1F1B17EB;
+    --ink: #F3EDE4; --muted: #A89E92; --line: #3A332B;
+    --accent: #2FBF98; --on-accent: #08120F; --tint: #2FBF9826;
+    --friend: #7D96FF; --danger: #FF6B5E; --danger-tint: #FF6B5E26;
+    --warning: #F2B85A; --warning-bg: #2E2516;
+  }
+}

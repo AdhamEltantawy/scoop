@@ -5,154 +5,228 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Scoop</title>
   <meta name="description" content="Explore your city on foot, one hexagon at a time.">
-  <meta name="theme-color" content="#1d2433">
+  <meta name="theme-color" content="#F5F0E8" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#14110E" media="(prefers-color-scheme: dark)">
+  <meta name="color-scheme" content="light dark">
   <meta name="apple-mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="icons/icon-192.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700&family=Instrument+Sans:wght@400;500;600;700&family=IBM+Plex+Sans+Arabic:wght@500;600&display=swap">
   <link rel="stylesheet" href="vendor/leaflet.css">
+  <link rel="stylesheet" href="tokens.css">
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
   <div id="map"></div>
 
-  <header class="stats" id="stats">
-    <div class="stat"><span class="num" id="statCells">0</span><span class="lbl">hexes</span></div>
-    <div class="stat"><span class="num" id="statScore">0</span><span class="lbl">score</span></div>
-    <div class="stat"><span class="num" id="statArea">0</span><span class="lbl">km²</span></div>
-    <div class="stat"><span class="num" id="statView">–</span><span class="lbl">of view</span></div>
-    <div class="stat walk-only"><span class="num" id="statWalkNew">0</span><span class="lbl">new</span></div>
-    <div class="stat walk-only"><span class="num" id="statWalkDist">0</span><span class="lbl">km</span></div>
+  <!-- Floating stats card: one layout per walk phase (body[data-phase]). -->
+  <header class="card stats" id="stats" aria-live="polite">
+    <div class="phase phase-idle">
+      <div class="stat-grid">
+        <div class="stat"><span class="num" id="statCells">0</span><span class="lbl">hexes</span></div>
+        <div class="stat"><span class="num" id="statScore">0</span><span class="lbl">points</span></div>
+        <div class="stat"><span class="num" id="statArea">0</span><span class="lbl">km² explored</span></div>
+      </div>
+      <div class="warmth"><div class="warmth-bar" id="warmthBar"></div><span id="warmthPct">0% warm</span></div>
+    </div>
+
+    <div class="phase phase-empty">
+      <span class="card-title">Your map is waiting</span>
+      <span class="card-body">Tap Start walk and head out. Your first hex lights up once you're 100 m from where you start.</span>
+    </div>
+
+    <div class="phase phase-gps">
+      <div class="state-line"><span class="state-dot gps"></span>Waiting for better GPS</div>
+      <div class="big-line"><span class="big" id="gpsAcc">±– m</span><span class="big-note" id="gpsNeed">needs ±40 m</span></div>
+      <span class="card-note">Step away from tall buildings. We'll start on our own.</span>
+    </div>
+
+    <div class="phase phase-warm">
+      <div class="state-line"><span class="state-dot warm"></span>Warming up<span class="timer" data-timer></span></div>
+      <div class="big-line"><span class="big" id="warmToGo">100 m</span><span class="big-note">until hexes start counting</span></div>
+      <div class="progress"><div class="progress-fill" id="warmBar"></div></div>
+    </div>
+
+    <div class="phase phase-rec">
+      <div class="state-line"><span class="state-dot rec"></span>Recording<span class="timer" data-timer></span></div>
+      <div class="rec-grid">
+        <div class="stat"><span class="big accent" id="statWalkNew">+0</span><span class="lbl">new hexes</span></div>
+        <div class="stat"><span class="big" id="statWalkDist">0.00</span><span class="lbl">km this walk</span></div>
+      </div>
+    </div>
+
+    <div class="phase phase-paused">
+      <div class="state-line warn"><span class="pause-glyph"><i></i><i></i></span>Paused · moving faster than walking<span class="timer" id="pauseLeft"></span></div>
+      <span class="card-title">Looks like you're on wheels</span>
+      <span class="card-note" id="pauseNote">Recording picks up again after a minute at walking speed. Your new hexes are safe.</span>
+    </div>
   </header>
 
-  <div class="compare-bar" id="compareBar" hidden>
-    <span id="compareText"></span>
-    <button id="btnCompareClose" aria-label="Stop comparing">✕</button>
+  <div class="card compare-bar" id="compareBar" hidden>
+    <div class="compare-head">
+      <span class="avatar sm friend" id="compareAvatar">?</span>
+      <span class="compare-title" id="compareTitle" dir="auto">You &amp; friend</span>
+      <button class="icon-btn sm" id="btnCompareClose" aria-label="Stop comparing">✕</button>
+    </div>
+    <div class="compare-legend" id="compareLegend"></div>
   </div>
 
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
-  <nav class="side-controls">
-    <button class="fab community-only" id="btnCommunity" aria-label="Community" title="Community">
-      <svg viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.2"/><path d="M3.5 19c0-3 2.5-5 5.5-5s5.5 2 5.5 5"/><circle cx="17" cy="9" r="2.4"/><path d="M15.5 14.2c2.8-.4 5 1.4 5 4.3"/></svg>
+  <nav class="edge-controls" aria-label="Map actions">
+    <button class="round checkin-only" id="btnCheckin" aria-label="Check in here" title="Check in here">
+      <svg viewBox="0 0 24 24"><path d="M12 21s-7-6.2-7-11.5a7 7 0 0114 0C19 14.8 12 21 12 21z"/><path d="M12 7v5M9.5 9.5h5"/></svg>
     </button>
-    <button class="fab checkin-only" id="btnCheckin" aria-label="Check in here" title="Check in here">
-      <svg viewBox="0 0 24 24"><path d="M12 21s-6.5-6-6.5-11a6.5 6.5 0 0 1 13 0c0 5-6.5 11-6.5 11z"/><path d="M9.5 10l1.8 1.8L15 8.2"/></svg>
-    </button>
-  </nav>
-
-  <nav class="controls">
-    <button class="fab" id="btnMenu" aria-label="Menu" title="Menu">
-      <svg viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
-    </button>
-    <button class="walk" id="btnWalk" aria-pressed="false">
-      <span class="dot"></span><span id="walkLabel">Start walk</span>
-    </button>
-    <button class="fab" id="btnLocate" aria-label="Center on my location" title="Center on my location">
-      <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg>
+    <button class="round" id="btnLocate" aria-label="Centre on my location" title="Centre on my location">
+      <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="6"/><path d="M12 2v4M12 18v4M2 12h4M18 12h4"/></svg>
     </button>
   </nav>
 
-  <div class="speed-hint">Paused — moving faster than walking</div>
+  <nav class="bottom-row" aria-label="Main">
+    <button class="round avatar-btn idle-only" id="btnMe" aria-label="Me"><span id="meInitial">·</span></button>
+    <span class="spacer walk-only" aria-hidden="true"></span>
+    <button class="walk-btn" id="btnWalk" aria-pressed="false">
+      <svg class="hex-glyph" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2l8.66 5v10L12 22l-8.66-5V7z"/></svg>
+      <span class="stop-glyph" aria-hidden="true"></span>
+      <span id="walkLabel">Start walk</span>
+    </button>
+    <button class="round idle-only community-only" id="btnSocial" aria-label="Friends">
+      <svg viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c.8-3.6 3.4-5.5 6.5-5.5s5.7 1.9 6.5 5.5M16 4.8a3.5 3.5 0 010 6.4M18 14.8c2 .8 3.1 2.6 3.5 5.2"/></svg>
+    </button>
+    <button class="round walk-only locate-walk" id="btnLocateWalk" aria-label="Centre on my location">
+      <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="6"/><path d="M12 2v4M12 18v4M2 12h4M18 12h4"/></svg>
+    </button>
+  </nav>
 
-  <div class="sheet-backdrop" id="sheetBackdrop" hidden></div>
-  <section class="sheet" id="sheet" aria-label="Menu" hidden>
-    <h2>Scoop</h2>
+  <div class="scrim" id="scrim"></div>
 
-    <p class="fine heat-legend">Street hexes (~0.015 km²). Explored hexes cool down when you stay away:
-      <span class="swatch hot"></span> just walked → <span class="swatch cold"></span> months ago.
-      Heat halves every 30 days, and so do the points a hex is worth.</p>
-
-    <label class="row">
-      <span>Map style</span>
-      <select id="selBasemap">
-        <option value="osm">OpenStreetMap</option>
-        <option value="hot">OpenStreetMap Humanitarian</option>
-        <option value="streets">Esri Streets</option>
-        <option value="satellite">Satellite</option>
-      </select>
-    </label>
-
-    <label class="row">
-      <span>Show unexplored grid</span>
-      <input type="checkbox" id="chkGrid">
-    </label>
-
-    <label class="row">
-      <span>Count</span>
-      <select id="selActivity">
-        <option value="walk">Walking only (up to 9 km/h)</option>
-        <option value="run">Walking &amp; running (up to 16 km/h)</option>
-      </select>
-    </label>
-
-    <label class="row">
-      <span>Ignore GPS fixes worse than</span>
-      <select id="selAccuracy">
-        <option value="25">25 m</option>
-        <option value="40">40 m</option>
-        <option value="75">75 m</option>
-        <option value="150">150 m</option>
-      </select>
-    </label>
-
-    <div class="row">
-      <span>Privacy zones<small>Hexes around these spots are never uploaded or put on share cards.</small></span>
-      <button id="btnAddZone" class="small">Add at map centre</button>
+  <!-- Me -->
+  <section class="sheet" id="meSheet" aria-label="Me" hidden>
+    <div class="grab"></div>
+    <div class="me-head">
+      <div class="avatar lg accent-ring" id="meAvatar">·</div>
+      <div class="me-who"><span class="me-name" id="meName" dir="auto">Your map</span><span class="me-sub" id="meSub">Everything stays on this phone</span></div>
+      <button class="icon-btn" id="btnSettings" aria-label="Settings">
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.3 5.3l2.1 2.1M16.6 16.6l2.1 2.1M5.3 18.7l2.1-2.1M16.6 7.4l2.1-2.1"/></svg>
+      </button>
     </div>
-    <ul class="zone-list" id="zoneList"></ul>
-
-    <div class="buttons">
-      <button id="btnTrends" class="wide">My trends</button>
-      <button id="btnShareCard" class="wide">Share my map as an image</button>
-      <button id="btnImportGpx">Import GPX…</button>
-      <button id="btnExport">Export backup</button>
-      <button id="btnImport">Restore backup…</button>
-      <button id="btnClear" class="danger">Clear everything</button>
+    <div class="tiles3">
+      <div class="tile"><span class="tile-num" id="meScore">0</span><span class="tile-lbl">score</span></div>
+      <div class="tile"><span class="tile-num" id="meStreak">0</span><span class="tile-lbl">day streak</span></div>
+      <div class="tile"><span class="tile-num" id="meBest">0</span><span class="tile-lbl">best streak</span></div>
     </div>
+    <div id="meSignedOut"></div>
+    <div class="panel trend">
+      <div class="trend-head"><span class="trend-title" id="trendTitle">New hexes · weekly</span><span class="trend-span" id="trendSpan">12 weeks</span></div>
+      <span class="trend-line" id="trendReadout" aria-live="polite"></span>
+      <div class="trend-chart" id="trendChart"></div>
+      <div class="trend-controls">
+        <div class="seg sm" id="segTrendMetric" role="radiogroup" aria-label="What to show"></div>
+        <div class="seg sm" id="segTrendUnit" role="radiogroup" aria-label="Per"></div>
+      </div>
+      <span class="fine" id="trendSummary"></span>
+    </div>
+    <div class="block">
+      <span class="label" id="badgeLabel">Badges</span>
+      <div class="badge-grid" id="badgeGrid"></div>
+    </div>
+    <div id="meAreas"></div>
+    <button class="btn outline" id="btnShareCard">Share my map as an image</button>
+    <span class="fine">Trends are private: worked out on this phone from your walks.</span>
+  </section>
+
+  <!-- Settings -->
+  <section class="sheet" id="settingsSheet" aria-label="Settings" hidden>
+    <div class="grab"></div>
+    <div class="sheet-head"><span class="sheet-title">Settings</span><button class="icon-btn sm" data-close aria-label="Close">✕</button></div>
+    <div class="panel">
+      <div class="heat-legend" id="heatLegend"></div>
+      <span class="fine">Hexes cool over the weeks: their heat and points halve every 30 days. Walk them again to warm them up — they're never lost.</span>
+    </div>
+    <div class="block">
+      <span class="label">Map</span>
+      <div class="seg" id="segBasemap" role="radiogroup" aria-label="Map style"></div>
+      <button class="toggle-row" id="btnGrid" role="switch" aria-checked="true"><span>Show unexplored grid</span><span class="switch"><span></span></span></button>
+      <div id="settingsMapExtra"></div>
+    </div>
+    <div class="block">
+      <span class="label">Walking</span>
+      <span class="sublabel">Count hexes when</span>
+      <div class="seg tall" id="segActivity" role="radiogroup" aria-label="Count hexes when"></div>
+      <span class="sublabel">Ignore GPS fixes worse than</span>
+      <div class="seg" id="segAccuracy" role="radiogroup" aria-label="Ignore GPS fixes worse than"></div>
+      <span class="fine" id="walkTip">Keep the screen on while walking: phones pause location in background tabs.</span>
+    </div>
+    <div class="block">
+      <span class="label">Privacy &amp; data</span>
+      <div class="list-card">
+        <button class="list-row" id="btnZones"><span>Privacy zones</span><span class="row-val" id="zonesCount">0 of 3</span><span class="chev">›</span></button>
+        <button class="list-row" id="btnImportGpx"><span>Import GPX</span><span class="row-val">Strava, Komoot…</span><span class="chev">›</span></button>
+        <button class="list-row" id="btnExport"><span>Export backup</span><span class="row-val"></span><span class="chev">›</span></button>
+        <button class="list-row" id="btnImport"><span>Restore backup</span><span class="row-val">Merges</span><span class="chev">›</span></button>
+        <button class="list-row danger" id="btnClear"><span>Clear everything</span></button>
+      </div>
+    </div>
+    <div id="settingsAccount"></div>
     <input type="file" id="fileGpx" accept=".gpx,application/gpx+xml,application/xml,text/xml" multiple hidden>
     <input type="file" id="fileJson" accept=".json,application/json" hidden>
-
-    <p class="fine">Your map is stored on this device — export a backup now and then.
-      <span id="communityNote">If you sign in to Community, only hex ids, visit counts and times, their areas and walk totals are uploaded, never your GPS tracks.</span>
-      <span id="walkTip">Keep the screen on while walking: phones pause location in background tabs.</span></p>
-    <button class="close" id="btnClose">Done</button>
+    <span class="fine" id="communityNote">Your map, walks, trends and privacy zones stay on this phone. Signed in, friends see which hexes you've explored — never when, and never your route.</span>
   </section>
 
-  <section class="sheet" id="trendsSheet" aria-label="My trends" hidden>
-    <h2>My trends</h2>
-    <div class="filters">
-      <select id="selTrendMetric" aria-label="What to show">
-        <option value="hexes">New hexes</option>
-        <option value="points">Points earned</option>
-        <option value="km">Distance</option>
-      </select>
-      <select id="selTrendUnit" aria-label="Per">
-        <option value="day">Daily</option>
-        <option value="week">Weekly</option>
-        <option value="month">Monthly</option>
-      </select>
-    </div>
-    <p class="trend-readout" id="trendReadout" aria-live="polite"></p>
-    <div class="trend-chart" id="trendChart"></div>
-    <p class="fine" id="trendSummary"></p>
-    <p class="fine">Only you can see this. It's worked out on this device from your walks.</p>
-    <button class="close" id="btnTrendsClose">Done</button>
+  <!-- Privacy zones (from Settings) -->
+  <section class="sheet" id="zonesSheet" aria-label="Privacy zones" hidden>
+    <div class="grab"></div>
+    <button class="back" id="btnZonesBack">‹ Settings</button>
+    <div class="detail-head"><span class="detail-title">Privacy zones</span>
+      <span class="body">Put a zone around home or work. Hexes inside it are never shared, never looked up and never on share cards. Zones stay on this phone.</span></div>
+    <div class="zone-list" id="zoneList"></div>
+    <button class="btn outline accent" id="btnAddZone">Add zone at map centre</button>
   </section>
 
-  <section class="sheet" id="communitySheet" aria-label="Community" hidden>
-    <h2>Community</h2>
-    <div class="tabs" id="communityTabs" role="tablist" hidden></div>
-    <div id="communityBody"></div>
-    <button class="close" id="btnCommunityClose">Done</button>
+  <!-- Friends: Feed · Friends · Ranks · Challenges -->
+  <section class="sheet" id="socialSheet" aria-label="Friends" hidden>
+    <div class="grab"></div>
+    <div id="socialBody"></div>
   </section>
 
+  <!-- Sign in -->
+  <section class="sheet" id="signinSheet" aria-label="Sign in" hidden>
+    <div class="grab"></div>
+    <div id="signinBody"></div>
+  </section>
+
+  <!-- Check in -->
   <section class="sheet" id="checkinSheet" aria-label="Check in" hidden>
-    <h2>Check in here</h2>
+    <div class="grab"></div>
     <div id="checkinBody"></div>
-    <button class="close secondary" id="btnCheckinClose">Cancel</button>
   </section>
+
+  <!-- Walk saved -->
+  <section class="sheet summary" id="summarySheet" aria-label="Walk saved" hidden>
+    <div class="grab"></div>
+    <div id="summaryBody"></div>
+  </section>
+
+  <!-- Onboarding (first launch) -->
+  <div class="onboard" id="onboard" hidden>
+    <div class="onboard-dim"></div>
+    <div class="onboard-card" id="onboardCard"></div>
+  </div>
+
+  <!-- Destructive confirmation -->
+  <div class="dialog-wrap" id="dialog" hidden>
+    <div class="dialog-scrim" data-cancel></div>
+    <div class="dialog" role="alertdialog" aria-modal="true" aria-labelledby="dialogTitle" aria-describedby="dialogBody">
+      <div class="hex-badge danger">!</div>
+      <span class="dialog-title" id="dialogTitle"></span>
+      <span class="body" id="dialogBody"></span>
+      <div class="dialog-actions" id="dialogActions"></div>
+    </div>
+  </div>
 
   <script src="vendor/capacitor.js"></script>
   <script src="vendor/leaflet.js"></script>
