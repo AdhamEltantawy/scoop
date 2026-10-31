@@ -25,12 +25,16 @@ explored yet.
 - **Street hexes** (~0.015 km²) everywhere.
 - **Fading heat**: explored hexes stay explored, but cool down when you stay
   away. Heat halves every 30 days since your last walk through a hex, shown
-  from orange (just walked) to grey (months ago). Walking through again warms
+  from ember red (just walked) to warm grey (100+ days). Walking through again warms
   it back up.
 - **Score**: each hex is worth 1 point, plus +1 at 2 visits, +2 at 4, +3 at 8
   and so on, times its heat. A walk earns the points its hexes had cooled off.
-- **Exploration stats**: hexes visited, score, area covered, the share of the
-  current view you've explored, plus distance and new hexes for the current walk.
+- **Exploration stats**: hexes, points and area explored, plus a warmth bar
+  showing how much of your map you've walked recently. While walking, the card
+  shows the walk's state: waiting for GPS, warming up (the first 100 m),
+  recording (new hexes and distance) or paused (moving too fast).
+- **Walk summary**: distance, points, new hexes, hexes warmed back up, time
+  and any badge you just earned.
 - **Trends**: new hexes, points or distance per day, week or month. Private:
   worked out on your device.
 - **Unexplored grid**: an outline of the hexes you haven't visited yet.
@@ -43,6 +47,16 @@ explored yet.
   into an image for the share sheet. No account needed.
 - **Privacy zones**: up to 3 circles (around home or work, say). Hexes inside them
   are never uploaded and never appear on share cards. Zones stay on your device.
+
+## Look and feel
+
+Everything happens over the map. Start or stop a walk at the bottom, open
+**Me** (score, streaks, trends, badges, areas; the gear opens Settings) on the
+left and **Friends** (Feed, Friends, Ranks, Challenges) on the right. Locate
+and Check in sit on the right edge. Destructive actions (clearing your map,
+removing a friend, deleting a challenge or your account) ask in a centred
+dialog. Colour roles: green is for walking now and actions, ember for heat
+only, blue for friends only. The app follows the system light or dark mode.
 
 ## Community (optional)
 
@@ -171,7 +185,7 @@ location to web apps once the screen locks.
 
 | File | Purpose |
 | --- | --- |
-| `index.html`, `style.css` | UI |
+| `index.html`, `style.css`, `tokens.css` | UI: the map plus bottom sheets. Colours, type, radii and motion live in `tokens.css` (Ember & Nile, light and dark) |
 | `app.js` | Map, H3 logic, GPS tracking, storage |
 | `social-core.js` | Pure helpers: heat and scores, edge band, areas, trends (unit tested) |
 | `areas.js` | Official country / city / district lookup (OpenStreetMap via Overpass) |

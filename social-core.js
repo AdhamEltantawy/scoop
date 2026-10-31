@@ -17,18 +17,18 @@
 
   // Keep in sync with award_badges() in the Supabase migration.
   const BADGES = {
-    first_walk: { icon: '👟', label: 'First steps', desc: 'Record your first walk' },
-    hex_100: { icon: '⬡', label: 'Explorer', desc: '100 street hexes' },
-    hex_1000: { icon: '🗺️', label: 'Cartographer', desc: '1,000 street hexes' },
-    hex_10000: { icon: '🌍', label: 'Pathfinder', desc: '10,000 street hexes' },
-    marathon: { icon: '🏅', label: 'Marathon', desc: 'Walk 42.2 km in total' },
-    km_500: { icon: '🚶', label: 'Long haul', desc: 'Walk 500 km in total' },
-    streak_7: { icon: '🔥', label: 'On a roll', desc: 'Walk 7 days in a row' },
-    streak_30: { icon: '🌋', label: 'Unstoppable', desc: 'Walk 30 days in a row' },
-    regular: { icon: '🏠', label: 'Regular', desc: 'Walk through one hex 10 times' },
-    first_meetup: { icon: '🤝', label: 'Meet-up', desc: 'Check in with a friend' },
-    coffee_10: { icon: '☕', label: 'Coffee crawl', desc: '10 coffee check-ins' },
-    photo_10: { icon: '📷', label: 'Photographer', desc: '10 photo check-ins' },
+    first_walk: { icon: '👟', glyph: '1', label: 'First steps', desc: 'Record your first walk' },
+    hex_100: { icon: '⬡', glyph: '100', label: 'Explorer', desc: '100 street hexes' },
+    hex_1000: { icon: '🗺️', glyph: '1k', label: 'Cartographer', desc: '1,000 street hexes' },
+    hex_10000: { icon: '🌍', glyph: '10k', label: 'Pathfinder', desc: '10,000 street hexes' },
+    marathon: { icon: '🏅', glyph: '42', label: 'Marathon', desc: 'Walk 42.2 km in total' },
+    km_500: { icon: '🚶', glyph: '500', label: 'Long haul', desc: 'Walk 500 km in total' },
+    streak_7: { icon: '🔥', glyph: '7d', label: 'On a roll', desc: 'Walk 7 days in a row' },
+    streak_30: { icon: '🌋', glyph: '30d', label: 'Unstoppable', desc: 'Walk 30 days in a row' },
+    regular: { icon: '🏠', glyph: '×10', label: 'Regular', desc: 'Walk through one hex 10 times' },
+    first_meetup: { icon: '🤝', glyph: 'Meet', label: 'Meet-up', desc: 'Check in with a friend' },
+    coffee_10: { icon: '☕', glyph: '10c', label: 'Coffee crawl', desc: '10 coffee check-ins' },
+    photo_10: { icon: '📷', glyph: '10p', label: 'Photographer', desc: '10 photo check-ins' },
   };
 
   const KUDOS = ['👏', '🔥', '❤️', '👣'];
@@ -245,6 +245,25 @@
     return { current, longest };
   }
 
+  /**
+   * Badges your own walks already earn, worked out on the device (the server
+   * awards the same ones, plus the check-in badges, once you sign in).
+   * stats: { walks, hexes, km, longestStreak, maxVisits }
+   */
+  function localBadges(stats) {
+    const out = new Set();
+    if (stats.walks > 0) out.add('first_walk');
+    if (stats.hexes >= 100) out.add('hex_100');
+    if (stats.hexes >= 1000) out.add('hex_1000');
+    if (stats.hexes >= 10000) out.add('hex_10000');
+    if (stats.km >= 42.2) out.add('marathon');
+    if (stats.km >= 500) out.add('km_500');
+    if (stats.longestStreak >= 7) out.add('streak_7');
+    if (stats.longestStreak >= 30) out.add('streak_30');
+    if (stats.maxVisits >= 10) out.add('regular');
+    return out;
+  }
+
   /** Overlap between two sets of (display) cells. */
   function compare(mine, theirs) {
     let both = 0;
@@ -324,6 +343,6 @@
     CHECKIN_KINDS, BADGES, KUDOS, DAY_MS, HALF_LIFE_DAYS, CORE_SCALE,
     checkinPoints, regularBonus, heat, hexValue, hexScore, visitGain, inRing, inCore,
     pickAreas, simplifyLine, inWays, waysBox, periodStart, trendBuckets,
-    streaks, compare, zoneFilter, cellSig, syncDelta, topPercent, chunk, validUsername, timeAgo, parseInvite,
+    streaks, localBadges, compare, zoneFilter, cellSig, syncDelta, topPercent, chunk, validUsername, timeAgo, parseInvite,
   };
 });

@@ -14,7 +14,7 @@
   const Areas = window.scoopAreas;
   if (!S || !core || !window.h3) return;
 
-  const { map, toast } = S;
+  const { map, toast, el: h, fill, segmented, confirmDialog } = S;
   const $ = (id) => document.getElementById(id);
   const cfg = window.SCOOP_CONFIG || {};
   // Invite links point at the web app, which also works for friends without the Android app.
@@ -33,8 +33,6 @@
   const PROFILE_COLS = 'id, username, display_name';
   const AREA_WAIT_MS = 3 * 86400000;
   const PHOTO_BUCKET = 'checkin-photos';
-  const FRIEND_COLOR = '#4cc9f0';
-  const COMMUNITY_COLOR = '#9b5de5';
 
   // Set once signed in (only possible when sb is configured).
   let session = null;
@@ -42,28 +40,6 @@
   const uid = () => (session ? session.user.id : null);
 
   // ---------- small helpers ----------
-
-  /** Build an element. Children are appended as text unless they're nodes. */
-  function h(tag, props, ...kids) {
-    const el = document.createElement(tag);
-    for (const [k, v] of Object.entries(props || {})) {
-      if (v === undefined || v === null || v === false) continue;
-      if (k.startsWith('on')) el.addEventListener(k.slice(2), v);
-      else if (k === 'class') el.className = v;
-      else if (k in el && typeof v !== 'string') el[k] = v;
-      else el.setAttribute(k, v === true ? '' : v);
-    }
-    for (const kid of kids.flat(Infinity)) {
-      if (kid === null || kid === undefined || kid === false) continue;
-      el.append(kid instanceof Node ? kid : String(kid));
-    }
-    return el;
-  }
-
-  /** Replace an element's children, skipping null/false (replaceChildren would print them). */
-  function fill(el, ...kids) {
-    el.replaceChildren(...kids.flat(Infinity).filter((k) => k !== null && k !== undefined && k !== false));
-  }
 
   function loadJSON(key, fallback) {
     try {
@@ -93,7 +69,13 @@
 
   const distance = (a, b) => h3.greatCircleDistance([a.lat, a.lng], [b.lat, b.lng], h3.UNITS.m);
   const nameOf = (p) => (p ? p.display_name || p.username : 'Someone');
+  const initialOf = (name) => (Array.from(String(name || '').trim())[0] || '?').toUpperCase();
   const fmtKm = (km) => Number(km).toFixed(km >= 10 ? 1 : 2);
+  const fmtPts = (n) => Math.round(Number(n) || 0).toLocaleString();
+  const avatar = (name, cls = '') => h('span', { class: `avatar ${cls}`, 'aria-hidden': 'true' }, initialOf(name));
+  const sheetHead = (title) => h('div', { class: 'sheet-head' },
+    h('span', { class: 'sheet-title' }, title),
+    h('button', { class: 'icon-btn sm', 'data-close': true, 'aria-label': 'Close' }, '✕'));
 
   async function shareFile(blob, name, title) {
     if (S.isNative) {
@@ -132,50 +114,77 @@
 
   map.createPane('zones').style.zIndex = '405';
   const zoneLayer = L.layerGroup([], { pane: 'zones' }).addTo(map);
+  const ZONE_RADII = [200, 300, 500, 800];
   /** @type {{lat:number,lng:number,r:number}[]} */
   const zones = loadJSON(ZONES_KEY, []);
   let isHidden = core.zoneFilter(zones, h3.cellToLatLng, distance);
+  // Zones are drawn only after "Show on map", so the map stays clean.
+  let zonesShown = false;
 
   function zonesChanged() {
     saveJSON(ZONES_KEY, zones);
     isHidden = core.zoneFilter(zones, h3.cellToLatLng, distance);
     drawZones();
     renderZoneList();
+    afterZonesChanged();
   }
 
   function drawZones() {
     zoneLayer.clearLayers();
+    if (!zonesShown) return;
     for (const z of zones) {
       L.circle([z.lat, z.lng], {
-        pane: 'zones', radius: z.r, color: '#6b7488', weight: 1.5, dashArray: '4 4',
-        fillColor: '#6b7488', fillOpacity: 0.12, interactive: false,
+        pane: 'zones', radius: z.r, color: S.COLORS.privacyStroke, weight: 2, dashArray: '6 5',
+        fillColor: S.COLORS.privacy, fillOpacity: 0.12, interactive: false,
       }).addTo(zoneLayer);
     }
   }
 
+  const zoneName = (i) => ['Zone 1', 'Zone 2', 'Zone 3'][i] || `Zone ${i + 1}`;
+
   function renderZoneList() {
-    const list = $('zoneList');
-    list.replaceChildren(...zones.map((z, i) => h('li', {},
-      h('span', {}, `Zone ${i + 1}`),
-      h('select', {
-        'aria-label': `Zone ${i + 1} radius`,
-        onchange: (e) => { z.r = Number(e.target.value); zonesChanged(); afterZonesChanged(); },
-      }, [200, 300, 500, 800].map((r) => h('option', { value: String(r), selected: r === z.r }, `${r} m`))),
-      h('button', { class: 'link', onclick: () => map.setView([z.lat, z.lng], 16) }, 'Show'),
-      h('button', {
-        class: 'link danger',
-        onclick: () => { zones.splice(i, 1); zonesChanged(); afterZonesChanged(); },
-      }, 'Remove'),
-    )));
+    fill($('zoneList'), zones.map((z, i) => h('div', { class: 'zone-card' },
+      h('div', { class: 'zone-head' },
+        h('span', { class: 'zone-ring', 'aria-hidden': 'true' }),
+        h('span', { class: 'zone-name' }, zoneName(i)),
+        h('span', { class: 'sub' }, `${z.r} m`)),
+      segmented(h('div', { class: 'seg', 'aria-label': `${zoneName(i)} radius` }),
+        ZONE_RADII.map((r) => [r, `${r} m`]), z.r, (r) => { z.r = r; zonesChanged(); }),
+      h('div', { class: 'btn-row' },
+        h('button', {
+          class: 'btn outline',
+          onclick: () => {
+            zonesShown = true;
+            drawZones();
+            S.closeSheet();
+            map.fitBounds(L.latLng(z.lat, z.lng).toBounds(z.r * 2.6));
+          },
+        }, 'Show on map'),
+        h('button', {
+          class: 'btn outline danger',
+          onclick: () => { zones.splice(i, 1); zonesChanged(); toast('Zone removed'); },
+        }, 'Remove')))));
     $('btnAddZone').disabled = zones.length >= 3;
+    $('btnAddZone').textContent = zones.length >= 3 ? 'Up to 3 zones' : 'Add zone at map centre';
+    $('zonesCount').textContent = `${zones.length} of 3`;
   }
 
+  $('btnZones').addEventListener('click', () => {
+    renderZoneList();
+    S.openSheet('zonesSheet');
+  });
+  $('btnZonesBack').addEventListener('click', () => S.openSettings());
   $('btnAddZone').addEventListener('click', () => {
+    if (zones.length >= 3) return;
     const c = map.getCenter();
     zones.push({ lat: c.lat, lng: c.lng, r: 300 });
+    zonesShown = true;
     zonesChanged();
-    afterZonesChanged();
     toast('Privacy zone added at the map centre');
+  });
+  document.addEventListener('scoop:cleared', () => {
+    zones.length = 0;
+    zonesChanged();
   });
 
   drawZones();
@@ -190,18 +199,17 @@
     const frame = { x: 40, y: 170, w: 1000, h: 880 };
     const canvas = h('canvas', { width: W, height: H });
     const ctx = canvas.getContext('2d');
+    const display = "'Bricolage Grotesque', system-ui, sans-serif";
+    const body = "'Instrument Sans', system-ui, sans-serif";
 
-    const bg = ctx.createLinearGradient(0, 0, 0, H);
-    bg.addColorStop(0, '#1d2433');
-    bg.addColorStop(1, '#121722');
-    ctx.fillStyle = bg;
+    ctx.fillStyle = '#F5F0E8';
     ctx.fillRect(0, 0, W, H);
 
-    ctx.fillStyle = '#f3f5f9';
-    ctx.font = '700 64px system-ui, sans-serif';
+    ctx.fillStyle = '#1E1A16';
+    ctx.font = `700 68px ${display}`;
     ctx.fillText('Scoop', 48, 112);
-    ctx.fillStyle = '#a3acc0';
-    ctx.font = '400 32px system-ui, sans-serif';
+    ctx.fillStyle = '#6E655B';
+    ctx.font = `500 32px ${body}`;
     ctx.textAlign = 'right';
     ctx.fillText(new Date().toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' }), W - 48, 108);
     ctx.textAlign = 'left';
@@ -209,9 +217,9 @@
     // Hexes in the current view, minus anything in a privacy zone.
     const bounds = map.getBounds();
     const inView = (c) => bounds.contains(h3.cellToLatLng(c));
-    const display = new Set();
-    for (const c of S.visited.keys()) if (!isHidden(c)) display.add(c);
-    const shown = [...display].filter(inView);
+    const shown = new Set();
+    for (const c of S.visited.keys()) if (!isHidden(c)) shown.add(c);
+    const now = Date.now();
 
     const size = map.getSize();
     const scale = Math.min(frame.w / size.x, frame.h / size.y);
@@ -230,9 +238,9 @@
 
     ctx.save();
     ctx.beginPath();
-    if (ctx.roundRect) ctx.roundRect(frame.x, frame.y, frame.w, frame.h, 28);
+    if (ctx.roundRect) ctx.roundRect(frame.x, frame.y, frame.w, frame.h, 40);
     else ctx.rect(frame.x, frame.y, frame.w, frame.h);
-    ctx.fillStyle = '#232b3d';
+    ctx.fillStyle = '#FFFFFF';
     ctx.fill();
     ctx.clip();
 
@@ -249,24 +257,37 @@
     if (grid.length && grid.length <= 6000) {
       ctx.beginPath();
       for (const c of grid) hexPath(c);
-      ctx.strokeStyle = 'rgba(163, 172, 192, 0.16)';
+      ctx.strokeStyle = 'rgba(26, 26, 26, 0.12)';
       ctx.lineWidth = 1.5;
       ctx.stroke();
     }
-    ctx.beginPath();
-    for (const c of shown) hexPath(c);
-    ctx.fillStyle = 'rgba(255, 122, 61, 0.6)';
-    ctx.fill();
-    ctx.strokeStyle = '#ff7a3d';
-    ctx.lineWidth = 2.5;
-    ctx.stroke();
+    // Same heat bands as the map, coldest first.
+    const bands = S.HEAT_BANDS.map(() => []);
+    for (const c of shown) {
+      if (!inView(c)) continue;
+      const heat = core.heat(S.lastSeen.get(c), now);
+      bands[S.HEAT_BANDS.findIndex((b) => heat >= b.min)].push(c);
+    }
+    for (let i = bands.length - 1; i >= 0; i--) {
+      if (!bands[i].length) continue;
+      const b = S.HEAT_BANDS[i];
+      ctx.beginPath();
+      for (const c of bands[i]) hexPath(c);
+      ctx.globalAlpha = b.fill;
+      ctx.fillStyle = b.color;
+      ctx.fill();
+      ctx.globalAlpha = 1;
+      ctx.strokeStyle = b.stroke;
+      ctx.lineWidth = 2.5;
+      ctx.stroke();
+    }
     ctx.restore();
 
     let km2 = 0;
     for (const c of S.visited.keys()) km2 += S.cellAreaCached(c);
     const totalKm = S.walks.reduce((a, w) => a + (w.km || 0), 0);
     const stats = [
-      [display.size.toLocaleString(), 'hexes'],
+      [shown.size.toLocaleString(), 'hexes'],
       [S.formatNum(km2), 'km² explored'],
       [S.formatNum(totalKm), 'km walked'],
       [S.walks.length.toLocaleString(), 'walks'],
@@ -275,15 +296,15 @@
     stats.forEach(([num, lbl], i) => {
       const x = 40 + colW * i + colW / 2;
       ctx.textAlign = 'center';
-      ctx.fillStyle = '#ffd166';
-      ctx.font = '700 56px system-ui, sans-serif';
-      ctx.fillText(num, x, 1150);
-      ctx.fillStyle = '#a3acc0';
-      ctx.font = '400 28px system-ui, sans-serif';
-      ctx.fillText(lbl.toUpperCase(), x, 1195);
+      ctx.fillStyle = i === 0 ? '#E0301E' : '#1E1A16';
+      ctx.font = `700 60px ${display}`;
+      ctx.fillText(num, x, 1152);
+      ctx.fillStyle = '#6E655B';
+      ctx.font = `500 28px ${body}`;
+      ctx.fillText(lbl, x, 1196);
     });
-    ctx.fillStyle = '#6b7488';
-    ctx.font = '400 28px system-ui, sans-serif';
+    ctx.fillStyle = '#0B7A62';
+    ctx.font = `600 28px ${body}`;
     ctx.fillText('Exploring my city on foot, one hexagon at a time', W / 2, 1290);
 
     const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/png'));
@@ -302,7 +323,7 @@
   // ---------- everything below needs a Supabase project ----------
 
   if (!sb) {
-    $('communityNote').textContent = 'Community features are off in this build (no Supabase project configured).';
+    $('communityNote').textContent = 'Your map, walks, trends and privacy zones stay on this phone. Community features are off in this build.';
     return;
   }
   document.body.classList.add('community-on');
@@ -366,11 +387,11 @@
       }
       syncStatus = `Synced ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
     } catch (err) {
-      syncStatus = navigator.onLine ? `Sync failed: ${err.message}` : 'Offline — will sync when back online';
+      syncStatus = navigator.onLine ? `Sync failed: ${err.message}` : 'Offline · will sync when back online';
     } finally {
       syncing = false;
-      const el = $('syncStatus');
-      if (el) el.textContent = syncStatus;
+      const status = $('syncStatus');
+      if (status) status.textContent = syncStatus;
     }
     if (syncAgain) {
       syncAgain = false;
@@ -399,13 +420,39 @@
   document.addEventListener('scoop:changed', () => scheduleSync());
   window.addEventListener('online', () => scheduleSync(1000));
 
-  // ---------- auth ----------
+  // ---------- auth and identity ----------
+
+  /** Home areas ([{kind, name, rank, total, id}]) for the identity line and Me sheet. */
+  let homes = [];
+
+  function updateIdentity() {
+    if (!profile) {
+      S.setIdentity({ initial: '·', name: 'Your map', sub: session ? 'Pick a username to finish signing in' : 'Signed out · everything stays on this phone' });
+      return;
+    }
+    const district = homes.find((a) => a.kind === 'district');
+    S.setIdentity({
+      initial: initialOf(nameOf(profile)),
+      name: nameOf(profile),
+      sub: district && district.name ? `Home district · ${district.name}` : `@${profile.username}`,
+    });
+  }
+
+  async function loadHomes() {
+    try {
+      homes = check(await sb.rpc('my_areas', { period: 'now' }));
+    } catch (err) {
+      homes = [];
+    }
+    updateIdentity();
+  }
 
   async function setSession(next) {
     const changed = uid() !== (next ? next.user.id : null);
     session = next;
     if (!changed && profile) return;
     profile = null;
+    homes = [];
     clearFriendOverlay();
     document.body.classList.toggle('signed-in', false);
     if (session) {
@@ -415,8 +462,17 @@
         fail(err);
       }
     }
+    updateIdentity();
     if (profile) onProfileReady();
-    renderCommunity();
+    if (S.currentSheet() === 'signinSheet') {
+      if (profile) {
+        S.closeSheet();
+        toast(`Signed in as ${nameOf(profile)}`);
+      } else if (session) {
+        renderSignIn(2);
+      }
+    }
+    if (S.currentSheet() === 'socialSheet') renderSocial();
   }
 
   function onProfileReady() {
@@ -424,6 +480,7 @@
     scheduleSync(500);
     acceptPendingInvite();
     loadCheckinMarkers();
+    loadHomes();
   }
 
   // Fires once at startup with the saved session (or null), then on every change.
@@ -449,82 +506,119 @@
     }
   }
 
-  // ---------- community sheet ----------
+  // ---------- sign in: email → code → name ----------
 
-  let tab = loadJSON(TAB_KEY, 'feed');
   let signInEmail = '';
 
-  $('btnCommunity').addEventListener('click', () => {
-    renderCommunity();
-    S.openSheet('communitySheet');
-  });
-  $('btnCommunityClose').addEventListener('click', S.closeSheet);
-
-  function setBody(...kids) {
-    fill($('communityBody'), ...kids);
+  function openSignIn() {
+    renderSignIn(session && !profile ? 2 : 0);
+    S.openSheet('signinSheet');
   }
 
-  function renderCommunity() {
-    if (!session) return renderSignIn();
-    if (!profile) return renderProfileSetup();
-    const tabs = [['feed', 'Feed'], ['friends', 'Friends'], ['ranks', 'Ranks'], ['challenges', 'Challenges'], ['me', 'Me']];
-    $('communityTabs').replaceChildren(...tabs.map(([key, label]) => h('button', {
-      class: 'tab', role: 'tab', 'aria-selected': String(key === tab),
-      onclick: () => { tab = key; saveJSON(TAB_KEY, tab); renderCommunity(); },
-    }, label)));
-    $('communityTabs').hidden = false;
-    const panel = h('div', {}, h('p', { class: 'fine' }, 'Loading…'));
-    setBody(panel);
-    const render = { feed: renderFeed, friends: renderFriends, ranks: renderRanks, challenges: renderChallenges, me: renderMe }[tab] || renderFeed;
-    render(panel).catch((err) => {
-      fill(panel, h('p', { class: 'fine' }, navigator.onLine ? `Couldn't load: ${err.message}` : 'You\'re offline.'));
-    });
-  }
+  function renderSignIn(step) {
+    const titles = ['Sign in', 'Check your email', 'Pick a name'];
+    const cta = h('button', { class: 'btn', type: 'submit', disabled: true }, ['Send code', 'Sign in', 'Start exploring'][step]);
+    let content;
+    let valid;
+    let submit;
 
-  function renderSignIn() {
-    $('communityTabs').hidden = true;
-    const email = h('input', { type: 'email', placeholder: 'you@example.com', autocomplete: 'email', value: signInEmail, required: true });
-    const code = h('input', { type: 'text', inputmode: 'numeric', autocomplete: 'one-time-code', placeholder: '6-digit code', maxlength: '10' });
-    const codeRow = h('label', { class: 'field', hidden: true }, h('span', {}, 'Code from the email'), code);
-    const button = h('button', { class: 'primary', type: 'submit' }, 'Email me a code');
-    let sent = false;
-    const form = h('form', {
+    if (step === 0) {
+      const email = h('input', {
+        class: 'input', type: 'email', placeholder: 'you@example.com', autocomplete: 'email', value: signInEmail, required: true,
+      });
+      valid = () => /^\S+@\S+\.\S+$/.test(email.value.trim());
+      email.addEventListener('input', () => { cta.disabled = !valid(); });
+      content = [
+        h('span', { class: 'body' }, "We'll email you a 6-digit code. No password to remember."),
+        h('label', { class: 'field' }, 'Email', email),
+      ];
+      submit = async () => {
+        signInEmail = email.value.trim();
+        check(await sb.auth.signInWithOtp({ email: signInEmail, options: { shouldCreateUser: true } }));
+        renderSignIn(1);
+      };
+    } else if (step === 1) {
+      const code = h('input', {
+        class: 'input code', inputmode: 'numeric', autocomplete: 'one-time-code', placeholder: '••••••', maxlength: '6',
+        'aria-label': 'Code from the email',
+      });
+      valid = () => /^\d{6}$/.test(code.value.trim());
+      code.addEventListener('input', () => {
+        code.value = code.value.replace(/\D/g, '').slice(0, 6);
+        cta.disabled = !valid();
+      });
+      content = [
+        h('span', { class: 'body' }, 'Enter the code we sent to ', h('b', { style: 'color:var(--ink)' }, signInEmail), '.'),
+        code,
+        h('button', {
+          class: 'link', type: 'button',
+          onclick: async () => {
+            try {
+              check(await sb.auth.signInWithOtp({ email: signInEmail, options: { shouldCreateUser: true } }));
+              toast('New code sent');
+            } catch (err) {
+              fail(err);
+            }
+          },
+        }, 'Resend code'),
+      ];
+      submit = async () => {
+        check(await sb.auth.verifyOtp({ email: signInEmail, token: code.value.trim(), type: 'email' }));
+        // onAuthStateChange takes it from here: closes the sheet or moves to step 3.
+      };
+      setTimeout(() => code.focus(), 360);
+    } else {
+      const f = profileFields(profile || {});
+      valid = () => core.validUsername(f.username.value.trim().toLowerCase());
+      f.username.addEventListener('input', () => { cta.disabled = !valid(); });
+      content = [
+        profileForm(f),
+        h('span', { class: 'card-note' }, 'Friends see your display name. Everyone else only ever sees "Explorer".'),
+      ];
+      submit = async () => {
+        try {
+          profile = check(await sb.from('profiles').insert({ id: uid(), ...readProfile(f) }).select(PROFILE_COLS).single());
+        } catch (err) {
+          throw profileError(err);
+        }
+        updateIdentity();
+        onProfileReady();
+        S.closeSheet();
+        toast(`Welcome, ${nameOf(profile)}`);
+      };
+    }
+
+    fill($('signinBody'), h('form', {
+      class: 'stack',
       onsubmit: async (e) => {
         e.preventDefault();
-        button.disabled = true;
+        if (!valid()) return;
+        cta.disabled = true;
         try {
-          if (!sent) {
-            signInEmail = email.value.trim();
-            check(await sb.auth.signInWithOtp({ email: signInEmail, options: { shouldCreateUser: true } }));
-            sent = true;
-            codeRow.hidden = false;
-            button.textContent = 'Sign in';
-            code.focus();
-            toast('Check your email for the code');
-          } else {
-            check(await sb.auth.verifyOtp({ email: signInEmail, token: code.value.trim(), type: 'email' }));
-          }
+          await submit();
         } catch (err) {
           fail(err);
         } finally {
-          button.disabled = false;
+          cta.disabled = !valid();
         }
       },
     },
-    h('p', {}, 'Sign in to add friends, compare maps, check in at places and climb the leaderboards.'),
-    h('label', { class: 'field' }, h('span', {}, 'Email'), email),
-    codeRow,
-    button,
-    h('p', { class: 'fine' }, 'Only hex ids, visit counts, visit times and walk totals are uploaded — never your GPS tracks. ' +
-      'Friends see your map and scores. Everyone else only sees an anonymous rank on area leaderboards. ' +
-      'Hexes inside your privacy zones are never uploaded.'));
-    setBody(form);
+    sheetHead(titles[step]),
+    h('div', { class: 'progress-steps', 'aria-hidden': 'true' }, [0, 1, 2].map((i) => h('span', { class: i <= step ? 'on' : '' }))),
+    content,
+    cta,
+    step === 0 ? h('span', { class: 'fine' }, 'Only hex ids, visit counts, visit times and walk totals are uploaded — never your GPS tracks. ' +
+      'Hexes inside your privacy zones are never uploaded.') : null,
+    step === 2 ? h('button', { class: 'btn ghost', type: 'button', onclick: () => sb.auth.signOut() }, 'Use a different email') : null));
+    cta.disabled = !valid();
   }
 
   function profileFields(p) {
     return {
-      username: h('input', { value: p.username || '', placeholder: 'walker_42', autocapitalize: 'none', maxlength: '20', required: true }),
-      display_name: h('input', { value: p.display_name || '', placeholder: 'Your name', maxlength: '40' }),
+      username: h('input', {
+        class: 'input', value: p.username || '', placeholder: 'walker_42', autocapitalize: 'none', autocomplete: 'username', maxlength: '20', required: true,
+      }),
+      display_name: h('input', { class: 'input', value: p.display_name || '', placeholder: 'Your name', maxlength: '40', dir: 'auto' }),
     };
   }
 
@@ -543,30 +637,143 @@
 
   function profileForm(f) {
     return [
-      h('label', { class: 'field' }, h('span', {}, 'Username'), f.username),
-      h('label', { class: 'field' }, h('span', {}, 'Display name'), f.display_name),
+      h('label', { class: 'field' }, 'Username', f.username),
+      h('label', { class: 'field' }, 'Display name', f.display_name),
     ];
   }
 
-  function renderProfileSetup() {
-    $('communityTabs').hidden = true;
-    const f = profileFields({});
-    setBody(h('form', {
-      onsubmit: async (e) => {
-        e.preventDefault();
-        try {
-          profile = check(await sb.from('profiles').insert({ id: uid(), ...readProfile(f) }).select(PROFILE_COLS).single());
-          onProfileReady();
-          renderCommunity();
-        } catch (err) {
-          fail(profileError(err));
-        }
+  // ---------- Me and Settings, signed-in parts ----------
+
+  document.addEventListener('scoop:me-open', async () => {
+    fill($('meSignedOut'), profile ? null : h('div', { class: 'panel tint' },
+      h('span', { class: 'panel-title' }, 'Walk with friends'),
+      h('span', { class: 'card-body' }, 'Sign in to compare maps, climb your district\'s ranks and race in challenges. Your map stays on this phone either way.'),
+      h('button', { class: 'btn md', onclick: openSignIn }, session ? 'Finish signing in' : 'Sign in')));
+    fill($('meAreas'));
+    if (!profile) return;
+    try {
+      const [badges, board] = await Promise.all([
+        sb.from('badges').select('badge_key, earned_at').eq('user_id', uid()).then(check),
+        sb.rpc('leaderboard', { period: 'now' }).then(check),
+        loadHomes(),
+      ]);
+      S.setServerBadges(new Map(badges.map((b) => [b.badge_key, b.earned_at])));
+      S.renderBadges();
+      // The server score also counts check-ins.
+      const me = board.find((r) => r.user_id === uid());
+      if (me) $('meScore').textContent = fmtPts(me.value);
+      const KIND = { district: 'District', city: 'City', country: 'Country' };
+      fill($('meAreas'), homes.length ? h('div', { class: 'block' },
+        h('span', { class: 'label' }, 'Your areas'),
+        h('div', { class: 'list-card' }, homes.map((a) => h('div', { class: 'list-row' },
+          h('span', { dir: 'auto' }, a.name || '?'),
+          h('span', { class: 'row-val' }, a.rank ? `#${a.rank} of ${Number(a.total).toLocaleString()}` : KIND[a.kind]),
+          a.rank ? h('span', { class: 'row-val accent' }, `top ${core.topPercent(a.rank, a.total)}%`) : null)))) : null);
+    } catch (err) {
+      // Offline: the local parts of the sheet are already there.
+    }
+  });
+
+  document.addEventListener('scoop:settings-open', () => {
+    fill($('settingsMapExtra'), profile ? h('button', {
+      class: 'toggle-row', role: 'switch', 'aria-checked': String(communityOn),
+      onclick: (e) => {
+        communityOn = !communityOn;
+        e.currentTarget.setAttribute('aria-checked', String(communityOn));
+        drawCommunity();
       },
-    },
-    h('p', {}, 'Pick a username your friends will see.'),
-    profileForm(f),
-    h('button', { class: 'primary', type: 'submit' }, 'Continue'),
-    h('button', { class: 'link', type: 'button', onclick: () => sb.auth.signOut() }, 'Use a different email')));
+    }, h('span', {}, 'Community map', h('small', {}, 'Hexes you and your friends explored. Tap one to see who got there first.')),
+    h('span', { class: 'switch' }, h('span'))) : null);
+
+    if (!profile) {
+      fill($('settingsAccount'), h('button', { class: 'btn outline', onclick: openSignIn }, session ? 'Finish signing in' : 'Sign in'));
+      return;
+    }
+    const f = profileFields(profile);
+    fill($('settingsAccount'), h('div', { class: 'stack' },
+      h('form', {
+        class: 'block',
+        onsubmit: async (e) => {
+          e.preventDefault();
+          try {
+            profile = check(await sb.from('profiles').update(readProfile(f)).eq('id', uid()).select(PROFILE_COLS).single());
+            updateIdentity();
+            toast('Profile saved');
+            if (communityOn) { communityKey = ''; drawCommunity(); }
+          } catch (err) {
+            fail(profileError(err));
+          }
+        },
+      },
+      h('span', { class: 'label' }, 'Account'),
+      profileForm(f),
+      h('button', { class: 'btn outline', type: 'submit' }, 'Save profile')),
+      h('div', { class: 'list-card' },
+        h('button', { class: 'list-row', onclick: () => sync() },
+          h('span', {}, 'Sync now'), h('span', { class: 'row-val', id: 'syncStatus' }, syncStatus), h('span', { class: 'chev' }, '›')),
+        h('button', { class: 'list-row danger', onclick: deleteAccount }, h('span', {}, 'Delete account'))),
+      h('button', {
+        class: 'btn outline',
+        onclick: async () => { await sb.auth.signOut(); S.closeSheet(); toast('Signed out · your map stays on this phone'); },
+      }, 'Sign out')));
+  });
+
+  async function deleteAccount() {
+    const choice = await confirmDialog({
+      title: 'Delete your account?',
+      body: 'This deletes your account, friends, check-ins and everything you uploaded. Your map on this phone stays. It can\'t be undone.',
+      confirm: 'Delete account',
+    });
+    if (choice !== 'confirm') return;
+    try {
+      const files = check(await sb.storage.from(PHOTO_BUCKET).list(uid(), { limit: 1000 }));
+      if (files.length) check(await sb.storage.from(PHOTO_BUCKET).remove(files.map((x) => `${uid()}/${x.name}`)));
+      check(await sb.rpc('delete_my_account'));
+      syncState = { uid: null, cells: {}, walks: [] };
+      saveSync();
+      await sb.auth.signOut();
+      S.closeSheet();
+      toast('Account deleted');
+    } catch (err) {
+      fail(err);
+    }
+  }
+
+  // ---------- Friends sheet ----------
+
+  const TABS = [['feed', 'Feed'], ['friends', 'Friends'], ['ranks', 'Ranks'], ['challenges', 'Challenges']];
+  let tab = loadJSON(TAB_KEY, 'ranks');
+  if (!TABS.some(([k]) => k === tab)) tab = 'ranks';
+  /** Challenge sub-view: null (list), 'new', or a challenge row. */
+  let chalView = null;
+
+  $('btnSocial').addEventListener('click', () => {
+    if (!profile) return openSignIn();
+    chalView = null;
+    renderSocial();
+    S.openSheet('socialSheet');
+  });
+
+  function renderSocial() {
+    if (!profile) return fill($('socialBody'));
+    const panel = h('div', { class: 'stack' }, h('span', { class: 'fine' }, 'Loading…'));
+    if (tab === 'challenges' && chalView) {
+      fill($('socialBody'), h('div', { class: 'stack' }, panel));
+    } else {
+      fill($('socialBody'), h('div', { class: 'stack' },
+        sheetHead('Friends'),
+        segmented(h('div', { class: 'seg tabs', 'aria-label': 'Friends sections' }), TABS, tab, (v) => {
+          tab = v;
+          chalView = null;
+          saveJSON(TAB_KEY, tab);
+          renderSocial();
+        }),
+        panel));
+    }
+    const render = { feed: renderFeed, friends: renderFriends, ranks: renderRanks, challenges: renderChallenges }[tab];
+    render(panel).catch((err) => {
+      fill(panel, h('span', { class: 'body' }, navigator.onLine ? `Couldn't load: ${err.message}` : "You're offline. Your map still works."));
+    });
   }
 
   // ---------- feed ----------
@@ -601,7 +808,7 @@
     const bar = h('div', { class: 'kudos' });
     const draw = () => {
       const mine = w.kudos.find((k) => k.user_id === uid());
-      bar.replaceChildren(...core.KUDOS.map((emoji) => {
+      fill(bar, core.KUDOS.map((emoji) => {
         const n = w.kudos.filter((k) => k.emoji === emoji).length;
         return h('button', {
           class: 'chip', 'aria-pressed': String(!!mine && mine.emoji === emoji), disabled: w.user_id === uid(),
@@ -627,35 +834,39 @@
   }
 
   function feedItem(item, urls) {
-    const when = h('time', {}, core.timeAgo(Date.parse(item.at)));
+    const who = item.type === 'checkin' ? item.author : item.profiles;
+    const mine = item.user_id === uid();
+    const name = mine ? 'You' : nameOf(who);
+    let text;
+    let extra = [];
     if (item.type === 'walk') {
-      return h('li', { class: 'feed-item' },
-        h('div', {}, h('b', {}, nameOf(item.profiles)), ` walked ${fmtKm(item.km)} km`,
-          item.new_cells ? ` · ${item.new_cells} new hex${item.new_cells === 1 ? '' : 'es'}` : '', ' ', when),
-        kudosBar(item));
-    }
-    if (item.type === 'badge') {
+      text = `walked ${fmtKm(item.km)} km` + (item.new_cells ? ` · ${item.new_cells} new hex${item.new_cells === 1 ? '' : 'es'}` : '');
+      extra = [kudosBar(item)];
+    } else if (item.type === 'badge') {
       const b = core.BADGES[item.badge_key] || { icon: '🏅', label: item.badge_key };
-      return h('li', { class: 'feed-item' },
-        h('div', {}, h('b', {}, nameOf(item.profiles)), ` earned ${b.icon} ${b.label} `, when));
+      text = `earned ${b.icon} ${b.label}`;
+    } else {
+      const kind = core.CHECKIN_KINDS[item.kind];
+      text = item.kind === 'meetup'
+        ? (item.met_with ? ['met up with ', h('bdi', {}, item.met ? nameOf(item.met) : 'a friend'), ' 🤝'] : 'is up for a meetup 🤝')
+        : `checked in · ${kind.icon} ${kind.label.toLowerCase()}`;
+      extra = [
+        item.note ? h('span', { class: 'feed-note', dir: 'auto' }, item.note) : null,
+        urls[item.photo_path] ? h('img', { class: 'feed-photo', src: urls[item.photo_path], alt: item.note || 'Check-in photo', loading: 'lazy' }) : null,
+        h('button', { class: 'link', onclick: () => { S.closeSheet(); map.setView(h3.cellToLatLng(item.cell), 17); } }, 'Show on map'),
+      ];
     }
-    const kind = core.CHECKIN_KINDS[item.kind];
-    const what = item.kind === 'meetup'
-      ? (item.met_with ? ` met up with ${item.met ? nameOf(item.met) : 'a friend'}` : ' is up for a meetup')
-      : ` checked in · ${kind.label.toLowerCase()}`;
-    return h('li', { class: 'feed-item' },
-      h('div', {}, `${kind.icon} `, h('b', {}, nameOf(item.author)), what, ' ', when),
-      item.note ? h('div', { class: 'note' }, item.note) : null,
-      urls[item.photo_path] ? h('img', { class: 'photo', src: urls[item.photo_path], alt: item.note || 'Check-in photo', loading: 'lazy' }) : null,
-      h('button', {
-        class: 'link',
-        onclick: () => { S.closeSheet(); map.setView(h3.cellToLatLng(item.cell), 17); },
-      }, 'Show on map'));
+    return h('div', { class: 'feed-item' },
+      avatar(nameOf(who), mine ? 'me' : ''),
+      h('div', { class: 'feed-main' },
+        h('span', { class: 'feed-text' }, h('b', {}, h('bdi', {}, name)), ' ', text),
+        h('span', { class: 'feed-meta' }, h('span', {}, core.timeAgo(Date.parse(item.at)))),
+        extra));
   }
 
   async function renderFeed(panel) {
-    const list = h('ul', { class: 'list' });
-    const more = h('button', { class: 'link', hidden: true }, 'Load more');
+    const list = h('div', { class: 'feed' });
+    const more = h('button', { class: 'btn outline', hidden: true }, 'Load more');
     let before = new Date(Date.now() + 60000).toISOString();
     const load = async () => {
       more.disabled = true;
@@ -665,7 +876,7 @@
       more.hidden = !page.more;
       more.disabled = false;
       if (!list.children.length) {
-        list.append(h('li', { class: 'fine' }, 'Nothing here yet. Add friends in the Friends tab, then go for a walk!'));
+        list.append(h('span', { class: 'body' }, 'Nothing here yet. Add friends in the Friends tab, then go for a walk!'));
       }
     };
     more.addEventListener('click', () => load().catch(fail));
@@ -716,26 +927,26 @@
 
   const isFriend = (r) => r.state === 'active' || r.state === 'renew';
   const daysLeft = (ms) => Math.max(0, Math.ceil((ms - Date.now()) / DAY));
-  const fmtPts = (n) => Math.round(Number(n) || 0).toLocaleString();
 
   async function renewFriend(r) {
     try {
       const [res] = check(await sb.rpc('renew_friendship', { other: r.other.id }));
-      toast(res.renewed ? `Renewed — friends with ${nameOf(r.other)} for another month`
-        : `Renewed on your side — waiting for ${nameOf(r.other)}`, 4000);
-      renderCommunity();
+      toast(res.renewed ? `Renewed · friends with ${nameOf(r.other)} for 30 more days`
+        : `Renewed on your side · waiting for ${nameOf(r.other)}`, 4000);
+      renderSocial();
     } catch (err) {
       fail(err);
     }
   }
 
+  /** Renewal chip: "21 days left", "Renew · 5 days left", "Waiting for them", "Renew — they did". */
   function renewal(r) {
     if (r.state === 'active') {
-      return h('small', { class: 'fine-inline' }, `renews in the last week · ${daysLeft(r.expires)} d left`);
+      return h('span', { class: 'chip status ok', role: 'note' }, `${daysLeft(r.expires)} days left`);
     }
-    if (r.iRenewed) return h('small', { class: 'fine-inline' }, `you renewed · waiting for them`);
-    return h('button', { class: 'chip renew', onclick: () => renewFriend(r) },
-      r.theyRenewed ? 'Renew — they did' : r.state === 'lapsed' ? 'Renew' : `Renew · ${daysLeft(r.expires)} d left`);
+    if (r.iRenewed) return h('span', { class: 'chip status quiet', role: 'note' }, 'Waiting for them');
+    return h('button', { class: 'chip status warn', onclick: () => renewFriend(r) },
+      r.theyRenewed ? 'Renew — they did' : r.state === 'lapsed' ? 'Renew' : `Renew · ${daysLeft(r.expires)} days left`);
   }
 
   async function renderFriends(panel) {
@@ -747,40 +958,49 @@
     const lapsed = rows.filter((r) => r.state === 'lapsed');
     const incoming = rows.filter((r) => r.state === 'pending' && r.incoming);
     const outgoing = rows.filter((r) => r.state === 'pending' && !r.incoming);
-    const codeInput = h('input', { placeholder: 'Friend\'s invite code or link', autocapitalize: 'characters' });
+    const codeInput = h('input', { class: 'input', placeholder: "Friend's invite code or link", autocapitalize: 'characters', 'aria-label': "Friend's invite code" });
+
+    const removeFriend = async (r) => {
+      const choice = await confirmDialog({
+        title: `Remove ${nameOf(r.other)}?`,
+        body: `You'll stop seeing each other's maps, walks and check-ins. You can add each other again with an invite code.`,
+        confirm: 'Remove friend',
+      });
+      if (choice !== 'confirm') return;
+      try {
+        check(await sb.from('friendships').delete().eq('requester', r.requester).eq('addressee', r.addressee));
+        if (overlay && overlay.friend.id === r.other.id) clearFriendOverlay();
+        renderSocial();
+      } catch (err) {
+        fail(err);
+      }
+    };
 
     const friendRow = (r) => {
       const p = r.other;
       const st = statsById[p.id];
       const showing = overlay && overlay.friend.id === p.id;
-      return h('li', { class: 'person friend' },
-        h('span', {}, h('b', {}, nameOf(p)),
-          st ? h('small', {}, `${fmtPts(st.score)} pts · ${fmtPts(st.week)} this week` +
-            (st.district_name ? ` · ${st.district_name} #${st.district_rank} of ${st.district_total}` : '')) : null,
-          renewal(r)),
-        h('button', {
-          class: 'chip', 'aria-pressed': String(showing),
-          onclick: () => (showing ? clearFriendOverlay() : showFriendOverlay(p)).then(() => renderCommunity()).catch(fail),
-        }, showing ? 'Hide map' : 'Compare'),
-        h('button', {
-          class: 'link danger',
-          onclick: async () => {
-            if (!confirm(`Remove ${nameOf(p)} from your friends?`)) return;
-            try {
-              check(await sb.from('friendships').delete().eq('requester', r.requester).eq('addressee', r.addressee));
-              if (showing) clearFriendOverlay();
-              renderCommunity();
-            } catch (err) {
-              fail(err);
-            }
-          },
-        }, 'Remove'));
+      return h('div', { class: 'person' },
+        h('div', { class: 'person-main' },
+          avatar(nameOf(p)),
+          h('div', { class: 'person-who' },
+            h('span', { dir: 'auto' }, nameOf(p)),
+            h('small', {}, st ? [st.district_name, `${fmtPts(st.week)} pts this week`].filter(Boolean).join(' · ') : `@${p.username}`)),
+          h('div', { class: 'person-end' },
+            st ? h('span', { class: 'score' }, fmtPts(st.score)) : null,
+            h('button', { class: 'link danger', 'aria-label': `Remove ${nameOf(p)}`, onclick: () => removeFriend(r) }, 'Remove'))),
+        h('div', { class: 'person-actions' },
+          h('button', {
+            class: 'chip', 'aria-pressed': String(!!showing),
+            onclick: () => (showing ? clearFriendOverlay() : showFriendOverlay(p)).catch(fail),
+          }, showing ? 'Hide map' : 'Compare maps'),
+          renewal(r)));
     };
 
     const respond = (r, accept) => async () => {
       try {
         check(await sb.rpc('respond_friend_request', { other: r.other.id, accept }));
-        renderCommunity();
+        renderSocial();
       } catch (err) {
         fail(err);
       }
@@ -789,55 +1009,53 @@
     const me = statsById[uid()];
     fill(panel,
       h('div', { class: 'invite' },
-        h('div', {}, h('small', {}, 'Your invite code'), h('div', { class: 'code' }, code)),
+        h('div', {}, h('small', {}, 'Your invite code'), h('span', { class: 'code' }, code)),
         h('button', {
-          class: 'primary',
+          class: 'btn sm',
           onclick: () => shareText('Scoop', 'Explore the city with me on Scoop!', `${PUBLIC_URL}?invite=${code}`)
             .catch((err) => { if (!cancelled(err)) fail(err); }),
         }, 'Share invite')),
       h('form', {
-        class: 'inline',
+        class: 'inline-form',
         onsubmit: async (e) => {
           e.preventDefault();
           const c = core.parseInvite(codeInput.value);
-          if (!c) return toast('That doesn\'t look like an invite code');
+          if (!c) return toast("That doesn't look like an invite code");
           try {
             const [p] = check(await sb.rpc('send_friend_request', { code: c }));
             toast({
               accepted: `You're friends with ${nameOf(p)}`,
-              renewing: `Renewed on your side — waiting for ${nameOf(p)}`,
+              renewing: `Renewed on your side · waiting for ${nameOf(p)}`,
             }[p.status] || `Request sent to ${nameOf(p)}`);
-            renderCommunity();
+            renderSocial();
           } catch (err) {
             fail(err);
           }
         },
-      }, codeInput, h('button', { type: 'submit' }, 'Add')),
-      incoming.length ? h('h3', {}, 'Requests') : null,
-      incoming.length ? h('ul', { class: 'list' }, incoming.map((r) => h('li', { class: 'person' },
-        h('b', {}, nameOf(r.other)),
-        h('button', { class: 'chip', onclick: respond(r, true) }, 'Accept'),
-        h('button', { class: 'link', onclick: respond(r, false) }, 'Decline')))) : null,
-      h('h3', {}, `Friends (${friends.length})`),
-      friends.length
-        ? h('ul', { class: 'list' }, friends.map(friendRow))
-        : h('p', { class: 'fine' }, 'No friends yet — share your invite code.'),
-      outgoing.length ? h('p', { class: 'fine' }, `Waiting on: ${outgoing.map((r) => nameOf(r.other)).join(', ')}`) : null,
-      lapsed.length ? h('h3', {}, 'Lapsed') : null,
-      lapsed.length ? h('ul', { class: 'list' }, lapsed.map((r) => h('li', { class: 'person' },
-        h('span', {}, h('b', {}, nameOf(r.other)),
-          h('small', {}, `You can renew for ${daysLeft(r.expires + LAPSE_GRACE_MS)} more days`)),
-        renewal(r)))) : null,
-      h('p', { class: 'fine' }, 'Friendships last a month. In the last week you both tap Renew to keep going — it only renews once you both have. ' +
-        'Friends see your map, walks, check-ins, scores and home district' + (me && me.district_name ? ` (${me.district_name})` : '') + '.'),
-      h('h3', {}, 'Map layers'),
-      h('label', { class: 'row' },
-        h('span', {}, 'Community map', h('small', {}, 'Street hexes explored by you and your friends. Tap one to see who got there first.')),
-        h('input', {
-          type: 'checkbox', checked: communityOn,
-          onchange: (e) => { communityOn = e.target.checked; drawCommunity(); },
-        })),
-    );
+      }, codeInput, h('button', { class: 'btn sm', type: 'submit' }, 'Add')),
+      incoming.length ? h('div', { class: 'block' },
+        h('span', { class: 'label' }, 'Requests'),
+        h('div', { class: 'people' }, incoming.map((r) => h('div', { class: 'person' },
+          h('div', { class: 'person-main' }, avatar(nameOf(r.other)),
+            h('div', { class: 'person-who' }, h('span', { dir: 'auto' }, nameOf(r.other)), h('small', {}, `@${r.other.username}`))),
+          h('div', { class: 'person-actions' },
+            h('button', { class: 'chip status ok', onclick: respond(r, true) }, 'Accept'),
+            h('button', { class: 'link', onclick: respond(r, false) }, 'Decline')))))) : null,
+      h('div', { class: 'block' },
+        h('span', { class: 'label' }, `Friends · ${friends.length}`),
+        friends.length
+          ? h('div', { class: 'people' }, friends.map(friendRow))
+          : h('span', { class: 'body' }, 'No friends yet. Share your invite code to walk together.')),
+      outgoing.length ? h('span', { class: 'fine' }, `Waiting on: ${outgoing.map((r) => nameOf(r.other)).join(', ')}`) : null,
+      lapsed.length ? h('div', { class: 'block' },
+        h('span', { class: 'label' }, 'Lapsed'),
+        h('div', { class: 'people' }, lapsed.map((r) => h('div', { class: 'person' },
+          h('div', { class: 'person-main' }, avatar(nameOf(r.other)),
+            h('div', { class: 'person-who' }, h('span', { dir: 'auto' }, nameOf(r.other)),
+              h('small', {}, `Renewable for ${daysLeft(r.expires + LAPSE_GRACE_MS)} more days`))),
+          h('div', { class: 'person-actions' }, renewal(r)))))) : null,
+      h('span', { class: 'fine' }, 'Friendships last 30 days. In the last week you both tap Renew to keep going — it only renews once you both have. ' +
+        'Friends see your map, walks, check-ins, scores and home district' + (me && me.district_name ? ` (${me.district_name})` : '') + '.'));
   }
 
   map.createPane('friends').style.zIndex = '425';
@@ -877,17 +1095,25 @@
     const bounds = map.getBounds().pad(0.5);
     const draw = [...theirs].filter((c) => bounds.contains(h3.cellToLatLng(c)));
     if (draw.length) {
-      L.polygon(h3.cellsToMultiPolygon(draw, false), {
-        pane: 'friends', color: FRIEND_COLOR, weight: 2, opacity: 0.95,
-        fillColor: FRIEND_COLOR, fillOpacity: 0.16, interactive: false,
+      // Inset outlines, so your heat colours still show inside their hexes.
+      const inset = (c) => {
+        const [clat, clng] = h3.cellToLatLng(c);
+        return [h3.cellToBoundary(c).map(([lat, lng]) => [clat + (lat - clat) * 0.86, clng + (lng - clng) * 0.86])];
+      };
+      L.polygon(draw.map(inset), {
+        pane: 'friends', color: S.COLORS.friend, weight: 2.4, opacity: 1,
+        fillColor: S.COLORS.friend, fillOpacity: 0.14, interactive: false,
       }).addTo(friendLayer);
     }
     const mine = new Set([...myDisplay.keys()].filter((c) => !isHidden(c)));
     const cmp = core.compare(mine, theirs);
-    $('compareText').replaceChildren(
-      h('b', {}, nameOf(overlay.friend)), ` · ${cmp.both.toLocaleString()} shared · `,
-      h('span', { class: 'you' }, `${cmp.onlyMine.toLocaleString()} only you`), ' · ',
-      h('span', { class: 'them' }, `${cmp.onlyTheirs.toLocaleString()} only them`));
+    const them = nameOf(overlay.friend);
+    $('compareAvatar').textContent = initialOf(them);
+    $('compareTitle').textContent = `You & ${them}`;
+    fill($('compareLegend'),
+      h('span', {}, h('span', { class: 'key shared' }), h('b', {}, cmp.both.toLocaleString()), 'shared'),
+      h('span', {}, h('span', { class: 'key mine' }), h('b', {}, cmp.onlyMine.toLocaleString()), 'only you'),
+      h('span', {}, h('span', { class: 'key theirs' }), h('b', {}, cmp.onlyTheirs.toLocaleString()), h('span', { dir: 'auto' }, `only ${them}`)));
     $('compareBar').hidden = false;
     document.body.classList.add('comparing');
   }
@@ -936,7 +1162,7 @@
         for (const r of rows) {
           L.polygon(h3.cellToBoundary(r.cell), {
             pane: 'community', stroke: false, interactive: false,
-            fillColor: COMMUNITY_COLOR, fillOpacity: Math.min(0.15 + 0.1 * r.explorers, 0.65),
+            fillColor: S.COLORS.community, fillOpacity: Math.min(0.15 + 0.1 * r.explorers, 0.65),
           }).addTo(communityLayer);
         }
       } catch (err) {
@@ -964,62 +1190,69 @@
 
   const rankPrefs = Object.assign({ scope: 'friends', period: 'now' }, loadJSON('scoop.ranks.v2', {}));
   const PERIODS = [['now', 'Now'], ['week', 'This week'], ['month', 'This month']];
+  const PERIOD_SUB = { now: 'Score right now', week: 'Points earned this week', month: 'Points earned this month' };
   const KIND_LABEL = { district: 'District', city: 'City', country: 'Country' };
 
-  function scoreNote() {
-    return h('p', { class: 'fine' },
-      'Score: each street hex is worth 1 point, plus a bonus for hexes you keep coming back to (+1 at 2 visits, +2 at 4, +3 at 8…). ' +
-      'Hexes cool down when you stay away: their points halve every 30 days, and walking through again brings them back. ' +
-      'Check-ins add points that fade the same way — photo 3, coffee or food 2, meeting a friend 5. ' +
-      '"This week" and "This month" count the points you earned in that time.');
+  function rankRow(r, { me, friend, name, sub }) {
+    return h('div', { class: `rank-row${me ? ' me' : friend ? ' friend' : name ? '' : ' stranger'}` },
+      h('span', { class: 'pos' }, String(r.rank)),
+      h('span', { class: 'dot', 'aria-hidden': 'true' }),
+      h('span', { class: 'who' }, h('span', { dir: 'auto' }, name || 'Explorer'), sub ? h('small', {}, sub) : null),
+      h('span', { class: 'val' }, fmtPts(r.value)));
   }
 
   async function renderRanks(panel) {
-    const homes = check(await sb.rpc('my_areas', { period: rankPrefs.period }));
-    const scopes = [['friends', 'Friends'], ...homes.map((a) => [a.kind, `${KIND_LABEL[a.kind]}: ${a.name || '?'}`])];
+    const areas = check(await sb.rpc('my_areas', { period: rankPrefs.period }));
+    const scopes = [['friends', 'Friends'], ...areas.map((a) => [a.kind, `${KIND_LABEL[a.kind]} · ${a.name || '?'}`])];
     if (!scopes.some(([v]) => v === rankPrefs.scope)) rankPrefs.scope = 'friends';
-    const select = (key, options) => h('select', {
-      'aria-label': key,
-      onchange: (e) => { rankPrefs[key] = e.target.value; saveJSON('scoop.ranks.v2', rankPrefs); renderCommunity(); },
-    }, options.map(([v, label]) => h('option', { value: v, selected: rankPrefs[key] === v }, label)));
-    const filters = h('div', { class: 'filters' }, select('scope', scopes), select('period', PERIODS));
-    const value = (v) => `${Number(v).toLocaleString(undefined, { maximumFractionDigits: 1 })} pts`;
+    const savePrefs = () => { saveJSON('scoop.ranks.v2', rankPrefs); renderSocial(); };
+    const controls = [
+      h('div', { class: 'chips' }, scopes.map(([v, label]) => h('button', {
+        class: 'chip', 'aria-pressed': String(rankPrefs.scope === v),
+        onclick: () => { rankPrefs.scope = v; savePrefs(); },
+      }, label))),
+      segmented(h('div', { class: 'seg sm', 'aria-label': 'Period' }), PERIODS, rankPrefs.period,
+        (v) => { rankPrefs.period = v; savePrefs(); }),
+    ];
+    const myName = `${nameOf(profile)} (you)`;
 
     if (rankPrefs.scope === 'friends') {
       const rows = check(await sb.rpc('leaderboard', { period: rankPrefs.period }));
-      fill(panel, filters,
-        h('ol', { class: 'list ranks' }, rows.map((r) => h('li', { class: r.user_id === uid() ? 'me' : '' },
-          h('span', { class: 'rank' }, String(r.rank)),
-          h('span', { class: 'who' }, nameOf(r)),
-          h('span', { class: 'val' }, value(r.value))))),
-        rows.length < 2 ? h('p', { class: 'fine' }, 'Add friends in the Friends tab to compete with them.') : null,
-        scoreNote());
+      const mine = rows.find((r) => r.user_id === uid());
+      fill(panel, controls,
+        h('div', { class: 'panel tint sm' },
+          h('span', { class: 'standing' }, mine && rows.length > 1 ? `You're #${mine.rank} of ${rows.length} friends` : 'Just you so far'),
+          h('span', { class: 'sub' }, PERIOD_SUB[rankPrefs.period])),
+        h('div', { class: 'rank-list' }, rows.map((r) => {
+          const me = r.user_id === uid();
+          return rankRow(r, { me, friend: !me, name: me ? myName : nameOf(r) });
+        })),
+        rows.length < 2 ? h('span', { class: 'body' }, 'Add friends in the Friends tab to compete with them.') : null,
+        h('span', { class: 'fine' }, 'Points fade as hexes cool, so the board always reflects recent walking. ' +
+          'Check-ins add points too: photo 3, coffee or food 2, meeting a friend 5.'));
       return;
     }
 
-    const home = homes.find((a) => a.kind === rankPrefs.scope);
+    const home = areas.find((a) => a.kind === rankPrefs.scope);
     const rows = check(await sb.rpc('area_leaderboard', { area: home.id, period: rankPrefs.period }));
     const mine = rows.find((r) => r.is_me);
     const total = rows.length ? rows[0].total : 0;
-    fill(panel, filters,
-      mine
-        ? h('p', { class: 'standing' }, `You're #${mine.rank} of ${Number(total).toLocaleString()} in ${home.name} · top ${core.topPercent(mine.rank, total)}%`)
-        : h('p', { class: 'fine' }, `No points in ${home.name} for this period yet.`),
-      h('ol', { class: 'list ranks' }, rows.map((r, i) => [
-        i > 0 && r.rank > rows[i - 1].rank + 1 ? h('li', { class: 'gap' }, '…') : null,
-        h('li', { class: r.is_me ? 'me' : r.is_friend ? 'friend' : '' },
-          h('span', { class: 'rank' }, String(r.rank)),
-          h('span', { class: 'who' }, r.username ? nameOf(r) : 'Explorer'),
-          h('span', { class: 'val' }, value(r.value))),
+    fill(panel, controls,
+      h('div', { class: 'panel tint sm' },
+        h('span', { class: 'standing', dir: 'auto' }, mine
+          ? `You're #${mine.rank} of ${Number(total).toLocaleString()} in ${home.name}`
+          : `No points in ${home.name} yet`),
+        h('span', { class: 'sub' }, mine
+          ? `Top ${core.topPercent(mine.rank, total)}%` + (home.kind === 'district' ? ' · your home district' : '')
+          : PERIOD_SUB[rankPrefs.period])),
+      h('div', { class: 'rank-list' }, rows.map((r, i) => [
+        i > 0 && r.rank > rows[i - 1].rank + 1 ? h('div', { class: 'rank-gap', 'aria-hidden': 'true' }, '…') : null,
+        rankRow(r, { me: r.is_me, friend: r.is_friend, name: r.is_me ? myName : r.username ? nameOf(r) : null }),
       ])),
-      h('p', { class: 'fine' }, `Everyone with explored hexes in ${home.name}. Only you and your friends are named. ` +
-        'Your district, city and country are where you score the most.'),
-      scoreNote());
+      h('span', { class: 'fine' }, "People you don't know show as Explorer. Points fade as hexes cool, so the board always reflects recent walking."));
   }
 
   // ---------- challenges ----------
-
-  let openChallenge = null;
 
   function challengeStatus(c) {
     const now = Date.now();
@@ -1031,183 +1264,149 @@
   }
 
   async function renderChallenges(panel) {
-    if (openChallenge) return renderChallengeDetail(panel, openChallenge);
+    if (chalView === 'new') return renderNewChallenge(panel);
+    if (chalView) return renderChallengeDetail(panel, chalView);
     const rows = check(await sb.from('challenge_members')
       .select('status, challenges(id, title, starts_at, ends_at, creator)')
       .eq('user_id', uid()));
     const list = rows.filter((r) => r.challenges)
       .sort((a, b) => (a.challenges.ends_at < b.challenges.ends_at ? 1 : -1));
     fill(panel,
-      h('button', { class: 'primary', onclick: () => renderNewChallenge(panel).catch(fail) }, 'New challenge'),
-      list.length
-        ? h('ul', { class: 'list' }, list.map((r) => {
-          const c = r.challenges;
-          return h('li', { class: 'person' },
-            h('span', {}, h('b', {}, c.title), h('small', {}, ` ${challengeStatus(c)}`)),
-            r.status === 'invited'
-              ? h('button', {
-                class: 'chip',
-                onclick: async () => {
-                  try {
-                    check(await sb.from('challenge_members').update({ status: 'joined' }).eq('challenge_id', c.id).eq('user_id', uid()));
-                    renderCommunity();
-                  } catch (err) {
-                    fail(err);
-                  }
-                },
-              }, 'Join')
-              : null,
-            h('button', { class: 'link', onclick: () => { openChallenge = c; renderCommunity(); } }, 'Open'));
-        }))
-        : null,
-      h('p', { class: 'fine' }, 'Race your friends wherever they live. Each of you is ranked in your own district by the points you earn there ' +
-        'during the challenge, and the best percentile wins: 6th of 500 beats 3rd of 4. ' +
-        'For an anonymous race against everyone in your district, city or country, see Ranks.'),
-    );
+      h('button', { class: 'btn outline accent', onclick: () => { chalView = 'new'; renderSocial(); } }, 'New challenge'),
+      list.map((r) => {
+        const c = r.challenges;
+        const invited = r.status === 'invited';
+        return h('button', {
+          class: 'chal-card',
+          onclick: () => { chalView = c; renderSocial(); },
+        },
+        h('span', { class: 'top' }, h('b', { dir: 'auto' }, c.title), h('small', {}, `${invited ? 'Invited' : challengeStatus(c)} ›`)),
+        h('span', { class: 'sub' }, invited ? 'Open it to join' : `${new Date(c.starts_at).toLocaleDateString()} – ${new Date(c.ends_at).toLocaleDateString()}`));
+      }),
+      h('span', { class: 'fine' }, 'Race your friends wherever they live. Each of you is ranked in your own district by the points you earn there ' +
+        'during the challenge, and the best top % wins: 6th of 500 beats 3rd of 4.'));
   }
 
   async function renderChallengeDetail(panel, c) {
     const rows = check(await sb.rpc('challenge_standings', { cid: c.id }));
     const mine = rows.find((r) => r.user_id === uid());
     const joined = (r) => r.status === 'joined';
+    const back = () => { chalView = null; renderSocial(); };
+    const leave = async () => {
+      const creator = c.creator === uid();
+      if (creator) {
+        const choice = await confirmDialog({
+          title: 'Delete this challenge?',
+          body: `"${c.title}" ends for everyone and its standings are gone. It can't be undone.`,
+          confirm: 'Delete challenge',
+        });
+        if (choice !== 'confirm') return;
+      }
+      try {
+        if (creator) check(await sb.from('challenges').delete().eq('id', c.id));
+        else check(await sb.from('challenge_members').delete().eq('challenge_id', c.id).eq('user_id', uid()));
+        back();
+      } catch (err) {
+        fail(err);
+      }
+    };
     fill(panel,
-      h('button', { class: 'link', onclick: () => { openChallenge = null; renderCommunity(); } }, '‹ All challenges'),
-      h('h3', {}, c.title),
-      h('p', { class: 'fine' }, `${new Date(c.starts_at).toLocaleDateString()} – ${new Date(c.ends_at).toLocaleDateString()} · ${challengeStatus(c)}`),
-      h('ol', { class: 'list ranks' }, rows.map((r) => h('li', { class: r.user_id === uid() ? 'me' : '' },
-        h('span', { class: 'rank' }, joined(r) ? String(r.rank) : '–'),
-        h('span', { class: 'who' }, nameOf(r),
-          joined(r) && r.district_name
-            ? h('small', {}, `#${r.district_rank ?? '–'} of ${r.district_total ?? '–'} in ${r.district_name} · ${fmtPts(r.value)} pts`)
-            : h('small', {}, joined(r) ? 'No points yet' : 'Invited')),
-        h('span', { class: 'val' }, joined(r) && Number(r.value) > 0 ? `top ${r.top_pct}%` : '–')))),
-      h('p', { class: 'fine' }, 'Ranked by place in your own district (where you score the most). Top % counts from the middle of your place, ' +
-        'so 1st of 1 is top 50%. No points means last.'),
-      c.creator === uid()
-        ? h('button', {
-          class: 'link danger',
-          onclick: async () => {
-            if (!confirm('Delete this challenge for everyone?')) return;
-            try {
-              check(await sb.from('challenges').delete().eq('id', c.id));
-              openChallenge = null;
-              renderCommunity();
-            } catch (err) {
-              fail(err);
-            }
-          },
-        }, 'Delete challenge')
-        : h('button', {
-          class: 'link danger',
-          onclick: async () => {
-            try {
-              check(await sb.from('challenge_members').delete().eq('challenge_id', c.id).eq('user_id', uid()));
-              openChallenge = null;
-              renderCommunity();
-            } catch (err) {
-              fail(err);
-            }
-          },
-        }, mine && mine.status === 'invited' ? 'Decline' : 'Leave challenge'),
-    );
+      h('button', { class: 'back', onclick: back }, '‹ Challenges'),
+      h('div', { class: 'detail-head' },
+        h('span', { class: 'detail-title', dir: 'auto' }, c.title),
+        h('span', { class: 'sub', style: 'font-size:13px' },
+          `${new Date(c.starts_at).toLocaleDateString()} – ${new Date(c.ends_at).toLocaleDateString()} · ${challengeStatus(c)}`)),
+      mine && mine.status === 'invited' ? h('button', {
+        class: 'btn',
+        onclick: async () => {
+          try {
+            check(await sb.from('challenge_members').update({ status: 'joined' }).eq('challenge_id', c.id).eq('user_id', uid()));
+            renderSocial();
+          } catch (err) {
+            fail(err);
+          }
+        },
+      }, 'Join challenge') : null,
+      h('div', { class: 'panel tint' },
+        h('b', { style: 'font-size:14px' }, 'Best top % wins'),
+        h('span', { class: 'card-note' }, 'Each of you is ranked in your own home district by points earned there. 6th of 500 (top 1.1%) beats 3rd of 4 (top 62.5%).')),
+      h('div', { class: 'stack tight', style: 'gap:6px' }, rows.map((r) => {
+        const me = r.user_id === uid();
+        const on = joined(r);
+        const has = on && Number(r.value) > 0;
+        return h('div', { class: `chal-row${me ? ' me' : ''}${has && r.rank === 1 ? ' win' : ''}` },
+          h('span', { class: 'pos' }, on ? String(r.rank) : '–'),
+          h('div', { class: 'who' },
+            h('span', { dir: 'auto' }, me ? `${nameOf(r)} (you)` : nameOf(r)),
+            h('small', {}, on
+              ? (r.district_name ? `${r.district_name} · #${r.district_rank ?? '–'} of ${r.district_total ?? '–'} · ${fmtPts(r.value)} pts` : 'No points yet')
+              : 'Invited')),
+          h('div', { class: 'top-pct' }, h('b', {}, has ? `${r.top_pct}%` : '–'), h('small', {}, 'top')));
+      })),
+      h('span', { class: 'card-note' }, 'Top % counts from the middle of your place, so 1st of 1 is top 50%. No points means last.'),
+      h('button', { class: 'btn outline danger', onclick: leave },
+        c.creator === uid() ? 'Delete challenge' : mine && mine.status === 'invited' ? 'Decline' : 'Leave challenge'));
   }
 
   async function renderNewChallenge(panel) {
     const friends = (await loadFriends()).filter(isFriend).map((r) => r.other);
-    const title = h('input', { placeholder: 'Weekend hex hunt', maxlength: '60', required: true });
-    const days = h('select', {}, [1, 3, 7, 14, 30].map((d) => h('option', { value: String(d), selected: d === 7 }, `${d} day${d === 1 ? '' : 's'}`)));
-    const picks = friends.map((p) => ({ p, box: h('input', { type: 'checkbox', checked: true }) }));
+    const title = h('input', { class: 'input', placeholder: 'Weekend loop', maxlength: '60', required: true, dir: 'auto' });
+    let days = 7;
+    const picked = new Set(friends.map((p) => p.id));
+    const send = h('button', { class: 'btn', type: 'submit' }, 'Send invites');
+    const valid = () => title.value.trim().length > 0 && picked.size > 0;
+    const refresh = () => { send.disabled = !valid(); };
+    title.addEventListener('input', refresh);
+    const back = () => { chalView = null; renderSocial(); };
     fill(panel, h('form', {
+      class: 'stack',
       onsubmit: async (e) => {
         e.preventDefault();
+        if (!valid()) return;
+        send.disabled = true;
         try {
           const start = new Date();
           const c = check(await sb.from('challenges').insert({
             title: title.value.trim(),
-            starts_at: start.toISOString(), ends_at: new Date(+start + Number(days.value) * 86400000).toISOString(),
+            starts_at: start.toISOString(), ends_at: new Date(+start + days * 86400000).toISOString(),
           }).select('id, title, starts_at, ends_at, creator').single());
-          const invites = picks.filter((x) => x.box.checked).map((x) => ({ challenge_id: c.id, user_id: x.p.id, status: 'invited' }));
+          const invites = [...picked].map((id) => ({ challenge_id: c.id, user_id: id, status: 'invited' }));
           if (invites.length) check(await sb.from('challenge_members').insert(invites));
-          openChallenge = c;
-          renderCommunity();
+          chalView = c;
+          renderSocial();
+          toast(`Invites sent to ${invites.length} friend${invites.length === 1 ? '' : 's'}`);
         } catch (err) {
           fail(err);
+          refresh();
         }
       },
     },
-    h('label', { class: 'field' }, h('span', {}, 'Name'), title),
-    h('label', { class: 'row' }, h('span', {}, 'Length'), days),
-    h('h3', {}, 'Invite'),
-    picks.length
-      ? picks.map((x) => h('label', { class: 'row' }, h('span', {}, nameOf(x.p)), x.box))
-      : h('p', { class: 'fine' }, 'Add friends first to race them.'),
-    h('button', { class: 'primary', type: 'submit' }, 'Start challenge'),
-    h('button', { class: 'link', type: 'button', onclick: () => renderCommunity() }, 'Cancel')));
-  }
-
-  // ---------- me: profile, badges, streak ----------
-
-  async function renderMe(panel) {
-    const [badges, board, homes] = await Promise.all([
-      sb.from('badges').select('badge_key, earned_at').eq('user_id', uid()).then(check),
-      sb.rpc('leaderboard', { period: 'now' }).then(check),
-      sb.rpc('my_areas', { period: 'now' }).then(check),
-    ]);
-    const earned = new Map(badges.map((b) => [b.badge_key, b.earned_at]));
-    const me = board.find((r) => r.user_id === uid());
-    const streak = core.streaks(S.walks.map((w) => w.start));
-    const f = profileFields(profile);
-    fill(panel,
-      h('div', { class: 'me-stats' },
-        h('div', {}, h('b', {}, me ? fmtPts(me.value) : '0'), h('small', {}, 'score')),
-        h('div', {}, h('b', {}, `${streak.current}🔥`), h('small', {}, 'day streak')),
-        h('div', {}, h('b', {}, String(streak.longest)), h('small', {}, 'best streak')),
-        h('div', {}, h('b', {}, `${earned.size}/${Object.keys(core.BADGES).length}`), h('small', {}, 'badges'))),
-      homes.length ? h('h3', {}, 'Your areas') : null,
-      homes.length ? h('ul', { class: 'list' }, homes.map((a) => h('li', { class: 'person' },
-        h('span', {}, h('b', {}, a.name || '?'), h('small', {}, KIND_LABEL[a.kind])),
-        h('span', { class: 'val' }, a.rank ? `#${a.rank} of ${a.total} · top ${core.topPercent(a.rank, a.total)}%` : '–')))) : null,
-      homes.length ? h('p', { class: 'fine' }, 'The district, city and country where you score the most. Friends can see your district.') : null,
-      h('h3', {}, 'Badges'),
-      h('ul', { class: 'badges' }, Object.entries(core.BADGES).map(([key, b]) => h('li', {
-        class: earned.has(key) ? 'earned' : '',
-        title: earned.has(key) ? `${b.desc} — earned ${new Date(earned.get(key)).toLocaleDateString()}` : b.desc,
-      }, h('span', { class: 'icon' }, b.icon), h('span', {}, b.label), h('small', {}, b.desc)))),
-      h('h3', {}, 'Profile'),
-      h('form', {
-        onsubmit: async (e) => {
-          e.preventDefault();
-          try {
-            profile = check(await sb.from('profiles').update(readProfile(f)).eq('id', uid()).select(PROFILE_COLS).single());
-            toast('Profile saved');
-            if (communityOn) { communityKey = ''; drawCommunity(); }
-          } catch (err) {
-            fail(profileError(err));
-          }
-        },
-      }, profileForm(f), h('button', { type: 'submit' }, 'Save profile')),
-      h('h3', {}, 'Sync'),
-      h('p', { class: 'fine', id: 'syncStatus' }, syncStatus),
-      h('div', { class: 'buttons' },
-        h('button', { onclick: () => sync() }, 'Sync now'),
-        h('button', { onclick: () => sb.auth.signOut() }, 'Sign out')),
-      h('button', { class: 'link danger', onclick: deleteAccount }, 'Delete my account and community data'),
-    );
-  }
-
-  async function deleteAccount() {
-    if (!confirm('Delete your account, friends, check-ins and everything you uploaded? Your map on this device stays.')) return;
-    try {
-      const files = check(await sb.storage.from(PHOTO_BUCKET).list(uid(), { limit: 1000 }));
-      if (files.length) check(await sb.storage.from(PHOTO_BUCKET).remove(files.map((f) => `${uid()}/${f.name}`)));
-      check(await sb.rpc('delete_my_account'));
-      syncState = { uid: null, cells: {}, walks: [] };
-      saveSync();
-      await sb.auth.signOut();
-      toast('Account deleted');
-    } catch (err) {
-      fail(err);
-    }
+    h('button', { class: 'back', type: 'button', onclick: back }, '‹ Challenges'),
+    h('span', { class: 'detail-title' }, 'New challenge'),
+    h('label', { class: 'field' }, 'Name', title),
+    h('div', { class: 'block', style: 'gap:6px' },
+      h('span', { class: 'sublabel', style: 'font-size:12.5px' }, 'Length'),
+      segmented(h('div', { class: 'seg', 'aria-label': 'Length' }),
+        [1, 3, 7, 14, 30].map((d) => [d, `${d} day${d === 1 ? '' : 's'}`]), days, (v) => { days = v; })),
+    h('div', { class: 'block', style: 'gap:6px' },
+      h('span', { class: 'sublabel', style: 'font-size:12.5px' }, 'Invite friends'),
+      friends.length
+        ? friends.map((p) => {
+          const row = h('button', {
+            class: 'pick-row', type: 'button', role: 'checkbox', 'aria-checked': 'true',
+            onclick: () => {
+              if (picked.has(p.id)) picked.delete(p.id);
+              else picked.add(p.id);
+              row.setAttribute('aria-checked', String(picked.has(p.id)));
+              row.querySelector('.tick').textContent = picked.has(p.id) ? '✓' : '';
+              refresh();
+            },
+          }, h('span', { dir: 'auto' }, nameOf(p)), h('span', { class: 'tick', 'aria-hidden': 'true' }, '✓'));
+          return row;
+        })
+        : h('span', { class: 'body' }, 'Add friends first to race them.')),
+    send));
+    refresh();
   }
 
   // ---------- check-ins ----------
@@ -1269,10 +1468,7 @@
   }
   map.on('zoomend', toggleCheckinMarkers);
 
-  // The check-in button appears once we know where you are.
-  setInterval(() => document.body.classList.toggle('has-fix', !!S.position()), 2000);
-
-  let checkinKind = 'coffee';
+  let checkinKind = null;
 
   function hereCell() {
     const pos = S.position();
@@ -1280,43 +1476,97 @@
   }
 
   $('btnCheckin').addEventListener('click', () => {
+    checkinKind = null;
     renderCheckin();
     S.openSheet('checkinSheet');
   });
-  $('btnCheckinClose').addEventListener('click', S.closeSheet);
 
-  function renderCheckin() {
+  /** One pattern for every reason you can't check in: glyph, title, why, one action and "Not now". */
+  function blocked(glyph, title, body, action, onAction) {
+    fill($('checkinBody'), h('div', { class: 'stack' },
+      h('div', { class: 'blocked' },
+        h('div', { class: 'hex-badge quiet', 'aria-hidden': 'true' }, glyph),
+        h('span', { class: 'card-title' }, title),
+        h('span', { class: 'body' }, body)),
+      h('div', { class: 'onb-actions' },
+        h('button', { class: 'btn', onclick: onAction }, action),
+        action === 'OK' ? null : h('button', { class: 'btn ghost', 'data-close': true }, 'Not now'))));
+  }
+
+  async function renderCheckin() {
     const cell = hereCell();
-    const body = $('checkinBody');
-    if (!cell) return body.replaceChildren(h('p', {}, 'Waiting for your location…'));
-    if (!S.visited.has(cell)) {
-      return body.replaceChildren(h('p', {}, 'Walk through this hex first — you can only check in where you\'ve explored.'));
+    if (!cell) {
+      return blocked('⌖', 'Finding you…', 'We need your location to check in. Outdoors it usually takes a few seconds.', 'Locate me', () => {
+        S.closeSheet();
+        S.locate();
+      });
     }
-    if (isHidden(cell)) return body.replaceChildren(h('p', {}, 'This hex is inside one of your privacy zones, so it can\'t be shared.'));
-    const note = h('input', { placeholder: 'Add a note (optional)', maxlength: '140' });
-    const photo = h('input', { type: 'file', accept: 'image/*', capture: 'environment' });
-    const photoHint = h('small', {});
-    const kinds = h('div', { class: 'kinds', role: 'radiogroup' });
-    const drawKinds = () => {
-      kinds.replaceChildren(...Object.entries(core.CHECKIN_KINDS).map(([key, k]) => h('button', {
-        type: 'button', class: 'kind', role: 'radio', 'aria-checked': String(key === checkinKind),
-        onclick: () => { checkinKind = key; drawKinds(); },
-      }, h('span', { class: 'icon' }, k.icon), k.label, h('small', {}, `+${k.points}`))));
-      photoHint.textContent = checkinKind === 'photo' ? 'Required' : 'Optional';
-      if (checkinKind === 'meetup') photoHint.textContent += ' — the meetup counts once a friend checks in here within 30 minutes';
+    if (!S.visited.has(cell)) {
+      return blocked('?', 'Walk this hex first', "Check-ins go on hexes you've walked. This one is still unexplored — walk through it and try again.",
+        'Start walk', () => S.startWalk());
+    }
+    if (isHidden(cell)) {
+      return blocked('◌', "You're in a privacy zone", 'Nothing inside your privacy zones is shared, so check-ins are off here.', 'Manage zones', () => {
+        renderZoneList();
+        S.openSheet('zonesSheet');
+      });
+    }
+    fill($('checkinBody'), h('span', { class: 'fine' }, 'Loading…'));
+    // One check-in of each kind per hex per (UTC) day.
+    let doneToday = new Map();
+    try {
+      const today = new Date().toISOString().slice(0, 10);
+      const rows = check(await sb.from('checkins').select('kind, created_at').eq('user_id', uid()).eq('cell', cell).eq('day', today));
+      doneToday = new Map(rows.map((r) => [r.kind, r.created_at]));
+    } catch (err) {
+      // Offline: the server still refuses duplicates.
+    }
+    const kinds = Object.entries(core.CHECKIN_KINDS);
+    if (doneToday.size >= kinds.length) {
+      return blocked('☕', 'Already checked in today', "You've checked in every way here today. Come back tomorrow for more points.", 'OK', S.closeSheet);
+    }
+    if (checkinKind && doneToday.has(checkinKind)) checkinKind = null;
+
+    const area = Areas ? Areas.of(cell) : null;
+    const district = area && area.district ? (Areas.info(area.district) || {}).name : null;
+    const ago = core.timeAgo(S.lastSeen.get(cell) || S.visited.get(cell));
+    const walkedAgo = /ago|now/.test(ago) ? ago : `on ${ago}`;
+    let file = null;
+    const note = h('input', { class: 'input note', placeholder: 'Add a note (optional)', maxlength: '140', dir: 'auto', 'aria-label': 'Note' });
+    const submit = h('button', { class: 'btn', type: 'submit', disabled: true }, 'Check in');
+    const photoInput = h('input', { type: 'file', accept: 'image/*', capture: 'environment', 'aria-label': 'Add a photo' });
+    const photoSlot = h('label', { class: 'photo-slot' });
+    const kindGrid = h('div', { class: 'kinds', role: 'radiogroup', 'aria-label': 'Kind of check-in' });
+    const POINTS_NOTE = { photo: '+3 · photo needed', coffee: '+2 pts', food: '+2 pts', meetup: '+5 with a friend' };
+    const meetupNote = h('span', { class: 'fine' }, 'The meetup counts once a friend checks in at this hex within 30 minutes.');
+
+    const valid = () => !!checkinKind && (checkinKind !== 'photo' || !!file);
+    const draw = () => {
+      fill(kindGrid, kinds.map(([key, k]) => h('button', {
+        type: 'button', class: 'kind', role: 'radio', 'aria-checked': String(key === checkinKind), disabled: doneToday.has(key),
+        onclick: () => { checkinKind = key; draw(); },
+      }, h('span', { class: 'emoji', 'aria-hidden': 'true' }, k.icon), h('b', {}, k.label),
+      h('small', {}, doneToday.has(key) ? 'Done today' : POINTS_NOTE[key]))));
+      photoSlot.hidden = checkinKind !== 'photo';
+      photoSlot.classList.toggle('has', !!file);
+      fill(photoSlot, h('b', {}, file ? 'Photo added' : 'Add a photo'),
+        h('span', {}, file ? file.name : 'Required for a photo check-in'), photoInput);
+      meetupNote.hidden = checkinKind !== 'meetup';
+      submit.textContent = checkinKind === 'meetup' ? 'Check in for a meetup' : 'Check in';
+      submit.disabled = !valid();
     };
-    drawKinds();
-    const submit = h('button', { class: 'primary', type: 'submit' }, 'Check in');
-    body.replaceChildren(h('form', {
+    photoInput.addEventListener('change', () => { file = photoInput.files[0] || null; draw(); });
+
+    fill($('checkinBody'), h('form', {
+      class: 'stack',
       onsubmit: async (e) => {
         e.preventDefault();
-        const file = photo.files[0];
-        if (checkinKind === 'photo' && !file) return toast('Add a photo first');
+        if (!valid()) return;
         submit.disabled = true;
         try {
           await sync(); // the server only accepts check-ins in hexes it knows you walked
           let photoPath = null;
-          if (file) {
+          if (file && checkinKind === 'photo') {
             photoPath = `${uid()}/${Date.now()}.jpg`;
             check(await sb.storage.from(PHOTO_BUCKET).upload(photoPath, await compressPhoto(file), { contentType: 'image/jpeg' }));
           }
@@ -1327,20 +1577,24 @@
           const row = check(await sb.from('checkins').select('met_with').eq('id', id).single());
           S.closeSheet();
           const k = core.CHECKIN_KINDS[checkinKind];
-          if (checkinKind !== 'meetup') toast(`${k.icon} Checked in · +${k.points} points`);
-          else toast(row.met_with ? '🤝 Meetup verified · +5 points' : '🤝 Checked in — waiting for a friend to check in here');
+          if (checkinKind !== 'meetup') toast(`${k.icon} Checked in · +${k.points} pts`);
+          else toast(row.met_with ? '🤝 Meetup verified · +5 pts' : '🤝 Checked in · waiting for a friend to check in here');
           loadCheckinMarkers();
         } catch (err) {
           fail(err.code === '23505' ? new Error('You already checked in like that here today') : err);
-        } finally {
-          submit.disabled = false;
+          submit.disabled = !valid();
         }
       },
     },
-    kinds,
-    h('label', { class: 'field' }, h('span', {}, 'Note'), note),
-    h('label', { class: 'field' }, h('span', {}, 'Photo ', photoHint), photo),
+    h('div', { class: 'stack tight', style: 'gap:2px' },
+      h('span', { class: 'sheet-title' }, 'Check in here'),
+      h('span', { class: 'me-sub' }, [district, `a hex you walked ${walkedAgo}`].filter(Boolean).join(' · '))),
+    kindGrid,
+    photoSlot,
+    note,
+    meetupNote,
     submit));
+    draw();
   }
 
   /** Downscale to at most 1280 px and re-encode as JPEG (also strips EXIF location). */
@@ -1353,6 +1607,8 @@
   }
 
   // ---------- boot ----------
+
+  updateIdentity();
 
   // Exposed for debugging and end-to-end tests.
   window.scoopSocial = { sb, sync, get profile() { return profile; } };

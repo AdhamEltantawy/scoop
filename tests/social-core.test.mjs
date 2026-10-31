@@ -176,3 +176,11 @@ test('trend buckets by day, week (from Monday) and month', () => {
   assert.deepEqual(months.map((b) => b.value), [0, 4, 15]);
   assert.equal(months[0].start, new Date(2026, 7, 1).getTime());
 });
+
+test('local badges follow walks, hexes, distance, streaks and repeat visits', () => {
+  const none = { walks: 0, hexes: 0, km: 0, longestStreak: 0, maxVisits: 0 };
+  assert.deepEqual([...core.localBadges(none)], []);
+  const some = core.localBadges({ walks: 3, hexes: 150, km: 50, longestStreak: 7, maxVisits: 10 });
+  assert.deepEqual([...some].sort(), ['first_walk', 'hex_100', 'marathon', 'regular', 'streak_7']);
+  for (const key of some) assert.ok(core.BADGES[key].glyph, key);
+});
