@@ -354,6 +354,7 @@
     syncing = true;
     try {
       if (syncState.uid !== uid()) syncState = { uid: uid(), cells: {}, walks: [] };
+      if (Areas) await Areas.ready; // Scoop's own districts, before reading any tags
       const areaOf = Areas ? Areas.of : () => null;
       let delta = core.syncDelta(S.visited, S.visitCount, S.lastSeen, areaOf, syncState.cells, isHidden);
       let untagged = 0;

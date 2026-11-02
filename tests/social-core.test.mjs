@@ -184,3 +184,62 @@ test('local badges follow walks, hexes, distance, streaks and repeat visits', ()
   assert.deepEqual([...some].sort(), ['first_walk', 'hex_100', 'marathon', 'regular', 'streak_7']);
   for (const key of some) assert.ok(core.BADGES[key].glyph, key);
 });
+
+test('districts: smallest containing district wins, bad features are skipped', () => {
+  const sq = (id, name, s, w, n, e) => ({ type: 'Feature', properties: { id, name },
+    geometry: { type: 'Polygon', coordinates: [[[w, s], [e, s], [e, n], [w, n], [w, s]]] } });
+  const ds = core.parseDistricts({ type: 'FeatureCollection', features: [
+    sq('r900000000001', 'Big', 0, 0, 10, 10),
+    sq('r900000000002', 'Small', 2, 2, 4, 4),
+    sq('r123', 'Not ours', 0, 0, 10, 10),
+    sq('r900000000003', '', 0, 0, 10, 10),
+    { type: 'Feature', properties: { id: 'r900000000004', name: 'No shape' }, geometry: null },
+  ] });
+  assert.deepEqual(ds.map((d) => d.name), ['Big', 'Small']);
+  assert.equal(core.districtAt(3, 3, ds).name, 'Small');
+  assert.equal(core.districtAt(8, 8, ds).name, 'Big');
+  assert.equal(core.districtAt(11, 8, ds), null);
+  assert.deepEqual(core.parseDistricts(null), []);
+});
+
+test('districts: Cairo landmarks land in the right district', async () => {
+  const { readFileSync } = await import('node:fs');
+  const ds = core.parseDistricts(JSON.parse(readFileSync(new URL('../districts.geojson', import.meta.url), 'utf8')));
+  const ids = ds.map((d) => d.id);
+  assert.equal(new Set(ids).size, ids.length, 'ids are unique');
+  const at = (lat, lng) => (core.districtAt(lat, lng, ds) || {}).name;
+  const places = [
+    [30.0626, 31.2197, 'Zamalek'],         // Mohamed Mazhar St
+    [30.0459, 31.2243, 'Zamalek'],         // Cairo Tower (Gezira)
+    [30.0444, 31.2357, 'Downtown'],        // Tahrir Square
+    [30.0389, 31.2325, 'Garden City'],     // US Embassy
+    [30.0273, 31.2297, 'Manial'],          // Manial Palace
+    [29.9598, 31.2581, 'Maadi'],           // Maadi metro
+    [29.9600, 31.3082, 'Zahraa al-Maadi'], // Zahraa al-Maadi Area 3
+    [29.9769, 31.3185, 'New Maadi'],
+    [30.0866, 31.3302, 'Heliopolis'],      // Baron Palace
+    [30.0730, 31.3460, 'Nasr City'],       // City Stars
+    [30.0630, 31.4940, 'Rehab'],           // inside New Cairo, smaller wins
+    [30.0300, 31.4700, 'New Cairo'],
+    [30.0720, 31.2840, 'Abbasiya'],        // Abbasiya Square
+    [30.0384, 31.2120, 'Dokki'],           // Dokki metro
+    [30.0560, 31.2010, 'Mohandessin'],     // Gameat el Dewal
+    [29.9792, 31.1342, 'Giza / Haram'],    // Pyramids
+    [30.0070, 30.9730, '6th of October'],  // Mall of Arabia
+  ];
+  for (const [lat, lng, name] of places) assert.equal(at(lat, lng), name, `${lat},${lng}`);
+  assert.equal(at(31.2001, 29.9187), undefined, 'Alexandria has none (yet)');
+});
+
+test('districts: names in districts.geojson match the ones migrations seed', async () => {
+  const { readFileSync, readdirSync } = await import('node:fs');
+  const dir = new URL('../supabase/migrations/', import.meta.url);
+  const seeded = {};
+  for (const f of readdirSync(dir).filter((f) => f.endsWith('.sql')).sort()) {
+    const sql = readFileSync(new URL(f, dir), 'utf8');
+    for (const [, id, name] of sql.matchAll(/\('(r9\d{11})', 'district', '((?:[^']|'')*)'/g)) seeded[id] = name.replace(/''/g, "'");
+  }
+  const geo = JSON.parse(readFileSync(new URL('../districts.geojson', import.meta.url), 'utf8'));
+  const own = Object.fromEntries(geo.features.map((f) => [f.properties.id, f.properties.name]));
+  assert.deepEqual(own, seeded, 'add a migration that upserts new or renamed districts');
+});

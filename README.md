@@ -75,8 +75,10 @@ Sign in with an emailed code to make Scoop social:
   the same hex within 30 minutes). Check-in points fade like hexes do.
 - **Official areas**: every hex is tagged with its country, city and district
   from OpenStreetMap's administrative boundaries (looked up via the Overpass
-  API, cached on the device, never drawn on the map). Your home district, city
-  and country are where you score the most.
+  API, cached on the device, never drawn on the map). Where OSM has no
+  districts, Scoop's own outlines in `districts.geojson` are used instead
+  (Greater Cairo and Giza so far). Your home district, city and country are
+  where you score the most.
 - **Leaderboards**: your friends, or everyone in your district, city or
   country, by current score or points earned this week or month. On area
   boards only you and your friends are named; everyone else is anonymous.
@@ -191,6 +193,7 @@ location to web apps once the screen locks.
 | `app.js` | Map, H3 logic, GPS tracking, storage |
 | `social-core.js` | Pure helpers: heat and scores, edge band, areas, trends (unit tested) |
 | `areas.js` | Official country / city / district lookup (OpenStreetMap via Overpass) |
+| `districts.geojson` | Scoop's own district outlines where OSM has none; edit on geojson.io, ids `r9` + 11 digits |
 | `social.js`, `config.js` | Community features, share cards, privacy zones |
 | `supabase/migrations/` | Database schema, row level security, scoring (Supabase) |
 | `supabase/tests/`, `scripts/test-db.sh`, `tests/` | Schema and unit tests |
