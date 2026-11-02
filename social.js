@@ -788,7 +788,7 @@
   async function loadFeedPage(before) {
     const lim = 20;
     const [walks, checkins, badges] = await Promise.all([
-      sb.from('walks').select('id, user_id, started_at, km, new_cells, profiles(username, display_name), kudos(user_id, emoji)')
+      sb.from('walks').select('id, user_id, started_at, km, new_cells, profiles!walks_user_id_fkey(username, display_name), kudos(user_id, emoji)')
         .lt('started_at', before).order('started_at', { ascending: false }).limit(lim),
       sb.from('checkins')
         .select('id, user_id, cell, kind, note, photo_path, met_with, created_at, author:profiles!checkins_user_id_fkey(username, display_name), met:profiles!checkins_met_with_fkey(username, display_name)')
