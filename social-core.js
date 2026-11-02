@@ -192,6 +192,38 @@
     return box;
   }
 
+  /**
+   * Scoop's own district outlines (districts.geojson), for cities where
+   * OpenStreetMap has no admin boundaries below the city. Ids sit in a range
+   * OSM relations won't reach (r900000000000+), so they fit the same columns.
+   * Returns [{ id, name, box, ways, size }]; bad features are skipped.
+   */
+  function parseDistricts(geojson) {
+    const out = [];
+    for (const f of (geojson && geojson.features) || []) {
+      const p = f.properties || {};
+      const g = f.geometry || {};
+      if (!/^r9\d{11}$/.test(p.id || '') || !p.name) continue;
+      const polys = g.type === 'Polygon' ? [g.coordinates] : g.type === 'MultiPolygon' ? g.coordinates : [];
+      const ways = polys.flat().filter((r) => Array.isArray(r) && r.length >= 4).map((r) => r.map(([lng, lat]) => [lat, lng]));
+      if (!ways.length) continue;
+      const box = waysBox(ways);
+      out.push({ id: p.id, name: String(p.name).slice(0, 120), box, ways, size: (box[2] - box[0]) * (box[3] - box[1]) });
+    }
+    return out;
+  }
+
+  /** The smallest of these districts containing [lat, lng], or null. */
+  function districtAt(lat, lng, districts) {
+    let best = null;
+    for (const d of districts) {
+      const b = d.box;
+      if (lat < b[0] || lat > b[2] || lng < b[1] || lng > b[3]) continue;
+      if ((!best || d.size < best.size) && inWays(lat, lng, d.ways)) best = d;
+    }
+    return best;
+  }
+
   // ---------- trends ----------
 
   /** Start (local time) of the day, week (Monday) or month containing t. */
@@ -342,7 +374,7 @@
   return {
     CHECKIN_KINDS, BADGES, KUDOS, DAY_MS, HALF_LIFE_DAYS, CORE_SCALE,
     checkinPoints, regularBonus, heat, hexValue, hexScore, visitGain, inRing, inCore,
-    pickAreas, simplifyLine, inWays, waysBox, periodStart, trendBuckets,
+    pickAreas, simplifyLine, inWays, waysBox, parseDistricts, districtAt, periodStart, trendBuckets,
     streaks, localBadges, compare, zoneFilter, cellSig, syncDelta, topPercent, chunk, validUsername, timeAgo, parseInvite,
   };
 });

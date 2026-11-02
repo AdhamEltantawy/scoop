@@ -8,6 +8,10 @@
  * which areas contain one point (rounded to ~10 m), then the smallest area's
  * outline is downloaded once, simplified and kept on the device. Every later
  * hex inside it is tagged without any network request.
+ *
+ * Where OSM has no districts (Cairo, for one), Scoop's own outlines in
+ * districts.geojson fill the district in. They're applied when a hex is read,
+ * on top of the cached OSM tags, so editing that file re-tags hexes for free.
  */
 (() => {
   'use strict';
@@ -29,6 +33,27 @@
    */
   const empty = () => ({ v: 1, areas: {}, combos: [], cells: {}, coarse: {}, shapes: [], noShape: {} });
   let db = load();
+
+  let custom = [];          // parsed districts.geojson
+  let customOf = new Map(); // cell -> custom district or null
+  const ready = fetch('districts.geojson')
+    .then((res) => (res.ok ? res.json() : null))
+    .then((g) => {
+      custom = core.parseDistricts(g);
+      customOf = new Map();
+    })
+    .catch(() => {
+      // No custom districts: OSM only.
+    });
+
+  function customDistrict(cell) {
+    if (!custom.length) return null;
+    if (!customOf.has(cell)) {
+      const [lat, lng] = h3.cellToLatLng(cell);
+      customOf.set(cell, core.districtAt(lat, lng, custom));
+    }
+    return customOf.get(cell);
+  }
 
   function load() {
     try {
@@ -66,7 +91,8 @@
     const i = db.cells[cell];
     if (i === undefined) return null;
     const [country, city, district] = db.combos[i].split('|');
-    return { country: country || null, city: city || null, district: district || null };
+    const own = customDistrict(cell);
+    return { country: country || null, city: city || null, district: own ? own.id : district || null };
   }
 
   /** Tag a hex from cached outlines. True if it worked. */
@@ -151,6 +177,7 @@
   function resolve(cells) {
     if (running) return running;
     running = (async () => {
+      await ready;
       let todo = [...cells].filter((c) => !lookupLocal(c));
       let requests = 0;
       try {
@@ -173,6 +200,8 @@
 
   /** Names for area ids we know about. */
   function info(id) {
+    const own = custom.find((d) => d.id === id);
+    if (own) return { name: own.name, level: 10, kind: 'district' };
     return db.areas[id] || null;
   }
 
@@ -181,5 +210,5 @@
     save();
   }
 
-  window.scoopAreas = { of, resolve, info, clear, all: () => db.areas };
+  window.scoopAreas = { of, resolve, info, clear, ready, all: () => db.areas };
 })();
