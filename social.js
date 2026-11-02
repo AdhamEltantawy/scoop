@@ -335,6 +335,7 @@
   let syncAgain = false;
   let syncTimer = null;
   let syncStatus = 'Not synced yet';
+  let pullError = null;
 
   function saveSync() {
     saveJSON(SYNC_KEY, syncState);
@@ -355,9 +356,14 @@
     try {
       if (syncState.uid !== uid()) syncState = { uid: uid(), cells: {}, walks: [] };
       if (!syncState.pulled) {
-        await pullFromServer();
-        syncState.pulled = true;
-        saveSync();
+        // A failed restore must never hold up uploads: try again next sync.
+        try {
+          await pullFromServer();
+          syncState.pulled = true;
+          saveSync();
+        } catch (err) {
+          pullError = err;
+        }
       }
       if (Areas) await Areas.ready; // Scoop's own districts, before reading any tags
       const areaOf = Areas ? Areas.of : () => null;
@@ -393,7 +399,9 @@
         syncState.walks.push(...batch.map((w) => w.start));
         saveSync();
       }
-      syncStatus = `Synced ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+      syncStatus = `Synced ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` +
+        (pullError ? ` · couldn't restore your map: ${pullError.message}` : '');
+      pullError = null;
     } catch (err) {
       syncStatus = navigator.onLine ? `Sync failed: ${err.message}` : 'Offline · will sync when back online';
     } finally {
@@ -417,6 +425,17 @@
     }
   }
 
+  /** Your own hexes with their dates (the table hides dates, so this goes through my_cells()). */
+  async function fetchMyCells() {
+    const out = [];
+    for (let after = ''; ;) {
+      const rows = check(await sb.rpc('my_cells', { after_cell: after }));
+      out.push(...rows);
+      if (rows.length < 1000) return out;
+      after = rows[rows.length - 1].cell;
+    }
+  }
+
   /**
    * Bring your hexes and walks back from your account, once per account on
    * this device: after reinstalling the app or signing in on another phone.
@@ -424,7 +443,7 @@
    */
   async function pullFromServer() {
     const [cellRows, walkRows] = await Promise.all([
-      fetchAll(() => sb.from('user_cells').select('cell, first_visited, last_visited, visits').eq('user_id', uid()), 'cell'),
+      fetchMyCells(),
       fetchAll(() => sb.from('walks').select('started_at, ended_at, km, new_cells').eq('user_id', uid()), 'started_at'),
     ]);
     const valid = (c) => h3.isValidCell(c) && h3.getResolution(c) === S.BASE_RES;
