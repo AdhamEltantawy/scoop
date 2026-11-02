@@ -43,6 +43,8 @@ explored yet.
   similar apps. Imported tracks get the same walking-only check, so the file
   needs timestamps.
 - **Backup / restore** as JSON. Your map lives on your device (`localStorage`).
+  If you sign in, it also comes back from your account after a reinstall or on
+  a new phone: your hexes, visit counts and walks are merged in, nothing lost.
 - **Installable and offline**: add it to your home screen and it opens like an app.
 - **Share cards**: turn the part of the map you're looking at, plus your totals,
   into an image for the share sheet. No account needed.

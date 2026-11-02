@@ -243,3 +243,31 @@ test('districts: names in districts.geojson match the ones migrations seed', asy
   const own = Object.fromEntries(geo.features.map((f) => [f.properties.id, f.properties.name]));
   assert.deepEqual(own, seeded, 'add a migration that upserts new or renamed districts');
 });
+
+test('mergeRemote restores hexes and walks without losing local data', () => {
+  const local = {
+    visited: new Map([['a', 5000]]),
+    visits: new Map([['a', 3]]),
+    lastSeen: new Map([['a', 9000]]),
+    walks: [{ start: 5000, end: 6000, km: 1, newCells: 1, points: 2 }],
+  };
+  const iso = (ms) => new Date(ms).toISOString();
+  const got = core.mergeRemote(local, [
+    { cell: 'a', first_visited: iso(1000), last_visited: iso(2000), visits: 2 },
+    { cell: 'b', first_visited: iso(3000), last_visited: iso(8000), visits: 4 },
+    { cell: 'bad', first_visited: iso(3000), last_visited: iso(3000), visits: 1 },
+  ], [
+    { started_at: iso(5000), ended_at: iso(6000), km: '1.000', new_cells: 1 },
+    { started_at: iso(1000), ended_at: iso(2000), km: '2.500', new_cells: 7 },
+  ], (c) => c !== 'bad');
+  assert.deepEqual(got, { cells: 1, walks: 1 });
+  assert.equal(local.visited.get('a'), 1000);  // earliest first visit wins
+  assert.equal(local.visits.get('a'), 3);      // local count was higher
+  assert.equal(local.lastSeen.get('a'), 9000); // local last visit was later
+  assert.equal(local.visited.get('b'), 3000);
+  assert.equal(local.visits.get('b'), 4);
+  assert.equal(local.lastSeen.get('b'), 8000);
+  assert.ok(!local.visited.has('bad'));
+  assert.deepEqual(local.walks.map((w) => [w.start, w.km, w.newCells]), [[1000, 2.5, 7], [5000, 1, 1]]);
+  assert.equal(local.walks[1].points, 2);
+});

@@ -354,6 +354,11 @@
     syncing = true;
     try {
       if (syncState.uid !== uid()) syncState = { uid: uid(), cells: {}, walks: [] };
+      if (!syncState.pulled) {
+        await pullFromServer();
+        syncState.pulled = true;
+        saveSync();
+      }
       if (Areas) await Areas.ready; // Scoop's own districts, before reading any tags
       const areaOf = Areas ? Areas.of : () => null;
       let delta = core.syncDelta(S.visited, S.visitCount, S.lastSeen, areaOf, syncState.cells, isHidden);
@@ -400,6 +405,39 @@
       syncAgain = false;
       await sync();
     }
+  }
+
+  /** Every row of a query, a page at a time (Supabase returns at most 1000 per request). */
+  async function fetchAll(query, order) {
+    const out = [];
+    for (let from = 0; ; from += 1000) {
+      const rows = check(await query().order(order).range(from, from + 999));
+      out.push(...rows);
+      if (rows.length < 1000) return out;
+    }
+  }
+
+  /**
+   * Bring your hexes and walks back from your account, once per account on
+   * this device: after reinstalling the app or signing in on another phone.
+   * It merges, so nothing on this phone is lost.
+   */
+  async function pullFromServer() {
+    const [cellRows, walkRows] = await Promise.all([
+      fetchAll(() => sb.from('user_cells').select('cell, first_visited, last_visited, visits').eq('user_id', uid()), 'cell'),
+      fetchAll(() => sb.from('walks').select('started_at, ended_at, km, new_cells').eq('user_id', uid()), 'started_at'),
+    ]);
+    const valid = (c) => h3.isValidCell(c) && h3.getResolution(c) === S.BASE_RES;
+    const got = core.mergeRemote(S, cellRows, walkRows, valid);
+    // Walks already on the server don't need uploading again.
+    for (const r of walkRows) {
+      const start = Date.parse(r.started_at);
+      if (!syncState.walks.includes(start)) syncState.walks.push(start);
+    }
+    if (!got.cells && !got.walks) return;
+    S.saveNow();
+    S.render();
+    toast(`Restored from your account · ${got.cells.toLocaleString()} hex${got.cells === 1 ? '' : 'es'}, ${got.walks.toLocaleString()} walk${got.walks === 1 ? '' : 's'}`, 4000);
   }
 
   /** Remove anything now inside a privacy zone from the server, or upload what left one. */
