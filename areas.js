@@ -36,8 +36,10 @@
 
   let custom = [];          // parsed districts.geojson
   let customOf = new Map(); // cell -> custom district or null
-  const ready = fetch('districts.geojson')
-    .then((res) => (res.ok ? res.json() : null))
+  // The build bundles districts.geojson as districts.js (window.SCOOP_DISTRICTS);
+  // running straight from the repo, it's fetched instead.
+  const ready = (window.SCOOP_DISTRICTS ? Promise.resolve(window.SCOOP_DISTRICTS)
+    : fetch('districts.geojson').then((res) => (res.ok ? res.json() : null)))
     .then((g) => {
       custom = core.parseDistricts(g);
       customOf = new Map();
@@ -86,12 +88,16 @@
     return i;
   }
 
-  /** { country, city, district } ids for a hex, or null if not known yet. */
+  /**
+   * { country, city, district } ids for a hex, or null if not known yet. In
+   * one of Scoop's own districts the district is known straight away, and
+   * country and city follow once OSM has been asked.
+   */
   function of(cell) {
     const i = db.cells[cell];
-    if (i === undefined) return null;
-    const [country, city, district] = db.combos[i].split('|');
     const own = customDistrict(cell);
+    if (i === undefined) return own ? { country: null, city: null, district: own.id } : null;
+    const [country, city, district] = db.combos[i].split('|');
     return { country: country || null, city: city || null, district: own ? own.id : district || null };
   }
 

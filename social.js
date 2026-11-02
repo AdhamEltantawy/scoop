@@ -358,13 +358,15 @@
       const areaOf = Areas ? Areas.of : () => null;
       let delta = core.syncDelta(S.visited, S.visitCount, S.lastSeen, areaOf, syncState.cells, isHidden);
       let untagged = 0;
-      if (Areas && delta.some((x) => !x.a)) {
+      // Hexes with no country yet still need OSM, even when Scoop's own district is known.
+      const needsOsm = (x) => !x.a || !x.a[0];
+      if (Areas && delta.some(needsOsm)) {
         // Tag hexes with their official areas first, so points land in the right ones.
-        untagged = await Areas.resolve(delta.filter((x) => !x.a).map((x) => x.c));
+        untagged = await Areas.resolve(delta.filter(needsOsm).map((x) => x.c));
         delta = core.syncDelta(S.visited, S.visitCount, S.lastSeen, areaOf, syncState.cells, isHidden);
         // Recent hexes wait for their areas; after a few days they go up without.
         const cutoff = Date.now() - AREA_WAIT_MS;
-        delta = delta.filter((x) => x.a || x.l < cutoff);
+        delta = delta.filter((x) => !needsOsm(x) || x.l < cutoff);
       }
       for (const batch of core.chunk(delta, 1000)) {
         const ids = new Set(batch.flatMap((x) => x.a || []).filter(Boolean));
