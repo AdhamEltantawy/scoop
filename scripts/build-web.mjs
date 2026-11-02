@@ -1,5 +1,5 @@
 // Copies the static web app into www/, which Capacitor bundles into the Android app.
-import { cpSync, rmSync, mkdirSync } from 'node:fs';
+import { cpSync, rmSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -10,4 +10,7 @@ const files = ['index.html', 'tokens.css', 'style.css', 'app.js', 'config.js', '
 rmSync(out, { recursive: true, force: true });
 mkdirSync(out);
 for (const f of files) cpSync(join(root, f), join(out, f), { recursive: true });
+// Districts as a script too, so they load like any other script on every platform.
+const districts = JSON.parse(readFileSync(join(root, 'districts.geojson'), 'utf8'));
+writeFileSync(join(out, 'districts.js'), `window.SCOOP_DISTRICTS = ${JSON.stringify(districts)};\n`);
 console.log(`Copied ${files.length} entries to www/`);
