@@ -108,6 +108,15 @@ select test.throws($$ insert into public.user_cells (user_id, cell, first_visite
 select test.throws($$ select last_visited from public.user_cells $$, 'last visits are not readable, even your own');
 select test.throws($$ select first_visited from public.user_cells $$, 'first visits are not readable');
 select test.throws($$ select * from public.score_events $$, 'score log is not readable');
+select test.ok((select count(*) from public.my_cells()) = (select count(*) from public.user_cells where user_id = auth.uid()),
+  'my_cells returns all your own hexes');
+select test.ok((select bool_and(m.first_visited is not null and m.last_visited >= m.first_visited) from public.my_cells() m),
+  'with their visit dates');
+select test.ok(not exists (select 1 from public.my_cells() m
+  where not exists (select 1 from public.user_cells o where o.user_id = auth.uid() and o.cell = m.cell)),
+  'and never anyone else''s');
+select test.ok((select count(*) from public.my_cells((select min(cell) from public.my_cells()))) =
+  (select count(*) from public.my_cells()) - 1, 'paged by cell');
 
 select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-00000000000b', false);
 select public.sync_cells(jsonb_build_array(
@@ -328,6 +337,7 @@ set role anon;
 select set_config('request.jwt.claim.sub', '', false);
 select test.throws($$ select * from public.profiles $$, 'anon has no table access');
 select test.throws($$ select public.leaderboard() $$, 'anon cannot call the API');
+select test.throws($$ select * from public.my_cells() $$, 'anon cannot read hexes');
 select test.throws($$ select * from public.areas $$, 'anon cannot read areas');
 
 reset role;
