@@ -18,10 +18,11 @@ explored yet.
     hexes from just before it sped up get dropped.
   - It resumes only after a full minute at walking speed, so red lights and
     traffic jams don't count. That minute is then credited to your walk.
-- **No accidental hexes**: a walk starts recording hexes once you're 100 m
-  from where you switched it on (that distance still counts), and a GPS fix
-  only unlocks a hex when it's in the inner 90% of the hex's area, so wobble
-  along a street doesn't unlock the hex next door.
+- **No accidental hexes**: a walk starts recording hexes once you've walked
+  100 m along your route from where you switched it on. Then the hexes from
+  that stretch, starting hex included, are credited, and so is the distance.
+  A GPS fix only unlocks a hex when it's in the inner 90% of the hex's area,
+  so wobble along a street doesn't unlock the hex next door.
 - **Street hexes** (~0.015 km²) everywhere.
 - **Fading heat**: explored hexes stay explored, but cool down when you stay
   away. Heat halves every 30 days since your last walk through a hex, shown

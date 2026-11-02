@@ -174,7 +174,8 @@
   // ---------- marking ----------
 
   // { start, km, newCells:Set, cells:Map<cell, time>, lastCell, lastFix, history, pending,
-  //   moving, fastCount, fastSince, slowSince, slowFixes, origin, armed, replay }
+  //   moving, fastCount, fastSince, slowSince, slowFixes, origin, armed, replay,
+  //   warmLast, warmMeters, warmCells }
   let walk = null;
 
   /** Mark base-res cells as walked through at `time`. Returns how many were new. */
@@ -583,7 +584,7 @@
     }
     if (!walk.gpsOk) {
       walk.gpsOk = true;
-      if (!walk.replay && !walk.armed) toast(`Hexes count once you're ${START_METERS} m away`);
+      if (!walk.replay && !walk.armed) toast(`Hexes count once you've walked ${START_METERS} m`);
     }
     walk.history.push({ latlng: here, time });
     while (walk.history.length && time - walk.history[0].time > SPEED_WINDOW_MS * 2) walk.history.shift();
@@ -649,15 +650,40 @@
 
   /** Queue the cells walked to reach `here`, plus the distance covered. */
   function addStep(here, cell, time) {
-    // Don't record the hex where the walk was switched on: wait until you've
-    // walked 100 m from there. That stretch still counts towards distance.
+    // Warm-up: hexes only start counting once you've walked 100 m along your
+    // route (not as the crow flies) from where the walk was switched on. Once
+    // you have, the hexes walked so far, starting hex included, are credited,
+    // and so is that distance.
     if (!walk.armed) {
-      if (!walk.origin) walk.origin = here;
-      walk.lastPoint = here;
-      if (haversine(walk.origin, here) < START_METERS) return;
+      if (!walk.origin) {
+        walk.origin = here;
+        walk.warmLast = here;
+        walk.warmMeters = 0;
+        walk.warmCells = [];
+      }
+      const step = haversine(walk.warmLast, here);
+      if (step >= MIN_STEP_METERS) {
+        walk.warmMeters += step;
+        walk.warmLast = here;
+      }
+      const last = walk.warmCells[walk.warmCells.length - 1];
+      let warmCell = cell;
+      if (last && warmCell !== last.cell && !inCoreOf(here, warmCell)) warmCell = last.cell;
+      if (!last || warmCell !== last.cell) walk.warmCells.push({ cell: warmCell, time });
+      if (walk.warmMeters < START_METERS) return;
+
       walk.armed = true;
-      walk.lastFix = { latlng: walk.origin, time };
+      let prevCell = null;
+      for (const w of walk.warmCells) {
+        walk.pending.push({ time: w.time, cells: pathBetween(prevCell, w.cell, MAX_LIVE_PATH_STEPS), km: 0 });
+        prevCell = w.cell;
+      }
+      walk.pending.push({ time, cells: [], km: walk.warmMeters / 1000 });
+      walk.lastCell = prevCell;
+      walk.lastFix = { latlng: walk.warmLast, time };
+      walk.warmCells = [];
       if (!walk.replay) toast('Recording hexes');
+      return;
     }
     // Edge band: GPS wobble near a hex's edge doesn't unlock it. Stay in the
     // hex you were in until the fix is well inside the new one.
@@ -724,8 +750,7 @@
       $('gpsAcc').textContent = walk.lastAcc ? `±${Math.round(walk.lastAcc)} m` : '±– m';
       $('gpsNeed').textContent = `needs ±${settings.accuracy} m`;
     } else if (phase === 'warm') {
-      const from = walk.origin && (walk.lastPoint || (lastPos && lastPos.latlng));
-      const done = from ? Math.min(START_METERS, haversine(walk.origin, from)) : 0;
+      const done = walk.origin ? Math.min(START_METERS, walk.warmMeters) : 0;
       $('warmToGo').textContent = `${Math.max(0, Math.round(START_METERS - done))} m`;
       $('warmBar').style.width = `${(done / START_METERS) * 100}%`;
     } else if (phase === 'paused') {
@@ -766,7 +791,8 @@
     return {
       start, km: 0, newCells: new Set(), cells: new Map(), lastCell: null, lastFix: null,
       history: [], pending: [], moving: false, fastCount: 0, fastSince: 0, slowSince: null, slowFixes: [],
-      origin: null, armed: false, replay, gpsOk: replay, lastAcc: null, lastPoint: null,
+      origin: null, armed: false, replay, gpsOk: replay, lastAcc: null,
+      warmLast: null, warmMeters: 0, warmCells: [],
     };
   }
 
@@ -860,7 +886,7 @@
     render();
     if (silent) return;
     if (!saved) {
-      toast(`Nothing recorded · hexes count once you're ${START_METERS} m away`, 3500);
+      toast(`Nothing recorded · hexes count once you've walked ${START_METERS} m`, 3500);
       return;
     }
     const fresh = [...earnedBadges()].filter((k) => !badgesBefore.has(k));
