@@ -230,3 +230,16 @@ test('districts: Cairo landmarks land in the right district', async () => {
   for (const [lat, lng, name] of places) assert.equal(at(lat, lng), name, `${lat},${lng}`);
   assert.equal(at(31.2001, 29.9187), undefined, 'Alexandria has none (yet)');
 });
+
+test('districts: names in districts.geojson match the ones migrations seed', async () => {
+  const { readFileSync, readdirSync } = await import('node:fs');
+  const dir = new URL('../supabase/migrations/', import.meta.url);
+  const seeded = {};
+  for (const f of readdirSync(dir).filter((f) => f.endsWith('.sql')).sort()) {
+    const sql = readFileSync(new URL(f, dir), 'utf8');
+    for (const [, id, name] of sql.matchAll(/\('(r9\d{11})', 'district', '((?:[^']|'')*)'/g)) seeded[id] = name.replace(/''/g, "'");
+  }
+  const geo = JSON.parse(readFileSync(new URL('../districts.geojson', import.meta.url), 'utf8'));
+  const own = Object.fromEntries(geo.features.map((f) => [f.properties.id, f.properties.name]));
+  assert.deepEqual(own, seeded, 'add a migration that upserts new or renamed districts');
+});

@@ -84,7 +84,14 @@ select test.ok(public.sync_cells(jsonb_build_array(
   jsonb_build_object('c', '8a3e6281ba17fff', 't', test.ms('60 days'), 'l', test.ms('30 days'), 'v', 1, 'a', '["r1","r2","r10"]'::jsonb),
   jsonb_build_object('c', '8a3e6281baaffff', 't', test.ms(), 'a', '["r1","r2","r10"]'::jsonb)
 ), (select a from areas_json)) = 3, 'sync inserts cells');
-select test.ok((select string_agg(name, ',' order by id) from public.areas) = 'Egypt,Zamalek,Cairo,Maadi', 'area names stored');
+select test.ok((select string_agg(name, ',' order by id) from public.areas where id !~ '^r9') = 'Egypt,Zamalek,Cairo,Maadi', 'area names stored');
+-- Scoop's own districts are seeded by migration and can't be renamed by a sync.
+select test.ok((select name from public.areas where id = 'r900000000001') = 'Zamalek', 'own districts are seeded');
+select public.sync_cells('[]'::jsonb,
+  '[{"id": "r900000000001", "kind": "district", "name": "Hacked", "level": 10},
+    {"id": "r900000000099", "kind": "district", "name": "Made up", "level": 10}]'::jsonb);
+select test.ok((select name from public.areas where id = 'r900000000001') = 'Zamalek'
+    and not exists (select 1 from public.areas where id = 'r900000000099'), 'syncs cannot rename or invent own districts');
 -- An older copy from another device doesn't move anything back.
 select public.sync_cells(jsonb_build_array(
   jsonb_build_object('c', '8a3e6281ba1ffff', 't', test.ms('90 days'), 'l', test.ms('90 days'), 'v', 2)));
