@@ -372,42 +372,37 @@
       }
       if (Areas) await Areas.ready; // Scoop's own districts, before reading any tags
       const areaOf = Areas ? Areas.of : () => null;
-      let delta = core.syncDelta(S.visited, S.visitCount, S.lastSeen, areaOf, syncState.cells, isHidden);
-      let untagged = 0;
-      let held = 0;
+      const cutoff = Date.now() - AREA_WAIT_MS;
       // Hexes with no country yet still need OSM, even when Scoop's own district is known.
       const needsOsm = (x) => !x.a || !x.a[0];
+      // Upload what can go up now. Recent hexes with no country wait for OSM;
+      // after a few days they go up without. In Scoop's own districts they go
+      // up right away: the server knows the rest. Returns what was changed
+      // before the upload (uploaded or still waiting).
+      const uploadCells = async () => {
+        const delta = core.syncDelta(S.visited, S.visitCount, S.lastSeen, areaOf, syncState.cells, isHidden);
+        const ready = delta.filter((x) => core.readyToUpload(x, cutoff));
+        for (const batch of core.chunk(ready, 1000)) {
+          const ids = new Set(batch.flatMap((x) => x.a || []).filter(Boolean));
+          const areas = [...ids].map((id) => ({ id, ...Areas.info(id) })).filter((a) => a.kind);
+          check(await sb.rpc('sync_cells', { cells: batch, areas }));
+          for (const x of batch) syncState.cells[x.c] = core.cellSig(x);
+          saveSync();
+        }
+        return delta;
+      };
+      // Upload first, look up areas after: OSM can be slow (or down), and a
+      // slow lookup must never keep hexes and walks off the server. Own-district
+      // hexes are looked up too, so the server learns their real country and city.
+      let delta = await uploadCells();
+      await uploadWalks();
+      let untagged = 0;
       if (Areas && delta.some(needsOsm)) {
-        // Tag hexes with their official areas first, so points land in the right ones.
         untagged = await Areas.resolve(delta.filter(needsOsm).map((x) => x.c));
-        delta = core.syncDelta(S.visited, S.visitCount, S.lastSeen, areaOf, syncState.cells, isHidden);
-        // Recent hexes wait for their areas; after a few days they go up without.
-        // In Scoop's own districts they go up right away: the server knows the rest.
-        const cutoff = Date.now() - AREA_WAIT_MS;
-        const before = delta.length;
-        delta = delta.filter((x) => core.readyToUpload(x, cutoff));
-        held = before - delta.length;
+        delta = await uploadCells();
       }
-      for (const batch of core.chunk(delta, 1000)) {
-        const ids = new Set(batch.flatMap((x) => x.a || []).filter(Boolean));
-        const areas = [...ids].map((id) => ({ id, ...Areas.info(id) })).filter((a) => a.kind);
-        check(await sb.rpc('sync_cells', { cells: batch, areas }));
-        for (const x of batch) syncState.cells[x.c] = core.cellSig(x);
-        saveSync();
-      }
+      const held = delta.filter((x) => !core.readyToUpload(x, cutoff)).length;
       if (untagged) scheduleSync(60000);
-      const known = new Set(syncState.walks);
-      const fresh = S.walks.filter((w) => !known.has(w.start) && w.end >= w.start);
-      for (const batch of core.chunk(fresh, 200)) {
-        check(await sb.from('walks').upsert(batch.map((w) => ({
-          started_at: new Date(w.start).toISOString(),
-          ended_at: new Date(w.end).toISOString(),
-          km: Math.min(299, Math.max(0, +(w.km || 0).toFixed(3))),
-          new_cells: w.newCells || 0,
-        })), { onConflict: 'user_id,started_at', ignoreDuplicates: true }));
-        syncState.walks.push(...batch.map((w) => w.start));
-        saveSync();
-      }
       syncStatus = `Synced ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` +
         (held ? ` · ${held.toLocaleString()} hex${held === 1 ? '' : 'es'} waiting for their area` : '') +
         (pullError ? ` · couldn't restore your map: ${pullError.message}` : '');
@@ -422,6 +417,21 @@
     if (syncAgain) {
       syncAgain = false;
       await sync();
+    }
+  }
+
+  async function uploadWalks() {
+    const known = new Set(syncState.walks);
+    const fresh = S.walks.filter((w) => !known.has(w.start) && w.end >= w.start);
+    for (const batch of core.chunk(fresh, 200)) {
+      check(await sb.from('walks').upsert(batch.map((w) => ({
+        started_at: new Date(w.start).toISOString(),
+        ended_at: new Date(w.end).toISOString(),
+        km: Math.min(299, Math.max(0, +(w.km || 0).toFixed(3))),
+        new_cells: w.newCells || 0,
+      })), { onConflict: 'user_id,started_at', ignoreDuplicates: true }));
+      syncState.walks.push(...batch.map((w) => w.start));
+      saveSync();
     }
   }
 
