@@ -260,7 +260,7 @@ test('mergeRemote restores hexes and walks without losing local data', () => {
     { started_at: iso(5000), ended_at: iso(6000), km: '1.000', new_cells: 1 },
     { started_at: iso(1000), ended_at: iso(2000), km: '2.500', new_cells: 7 },
   ], (c) => c !== 'bad');
-  assert.deepEqual(got, { cells: 1, walks: 1 });
+  assert.deepEqual(got, { cells: 1, warmed: 1, walks: 1 }); // 'a' got an earlier first visit
   assert.equal(local.visited.get('a'), 1000);  // earliest first visit wins
   assert.equal(local.visits.get('a'), 3);      // local count was higher
   assert.equal(local.lastSeen.get('a'), 9000); // local last visit was later
@@ -270,4 +270,21 @@ test('mergeRemote restores hexes and walks without losing local data', () => {
   assert.ok(!local.visited.has('bad'));
   assert.deepEqual(local.walks.map((w) => [w.start, w.km, w.newCells]), [[1000, 2.5, 7], [5000, 1, 1]]);
   assert.equal(local.walks[1].points, 2);
+});
+
+test('mergeRemote picks up hexes walked again on another device', () => {
+  const iso = (ms) => new Date(ms).toISOString();
+  const local = {
+    visited: new Map([['a', 1000], ['b', 1000]]),
+    visits: new Map([['a', 1], ['b', 2]]),
+    lastSeen: new Map([['a', 1000], ['b', 5000]]),
+    walks: [],
+  };
+  const got = core.mergeRemote(local, [
+    { cell: 'a', first_visited: iso(1000), last_visited: iso(7000), visits: 2 }, // walked again on the phone
+    { cell: 'b', first_visited: iso(1000), last_visited: iso(5000), visits: 2 }, // unchanged
+  ], []);
+  assert.deepEqual(got, { cells: 0, warmed: 1, walks: 0 });
+  assert.equal(local.visits.get('a'), 2);
+  assert.equal(local.lastSeen.get('a'), 7000);
 });
