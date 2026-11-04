@@ -121,14 +121,22 @@
     return false;
   }
 
-  async function overpass(query) {
-    const res = await fetch(OVERPASS, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: 'data=' + encodeURIComponent(query),
-    });
-    if (!res.ok) throw new Error(`Area lookup failed (${res.status})`);
-    return res.json();
+  /** One Overpass request, given up after `ms` so a stuck server can't stall syncing. */
+  async function overpass(query, ms = 30000) {
+    const ctl = typeof AbortController === 'function' ? new AbortController() : null;
+    const timer = ctl ? setTimeout(() => ctl.abort(), ms) : null;
+    try {
+      const res = await fetch(OVERPASS, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: 'data=' + encodeURIComponent(query),
+        signal: ctl ? ctl.signal : undefined,
+      });
+      if (!res.ok) throw new Error(`Area lookup failed (${res.status})`);
+      return await res.json();
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -159,7 +167,7 @@
     }
     await sleep(REQUEST_GAP_MS);
     try {
-      const geo = await overpass(`[out:json][timeout:60];rel(${smallest.id.slice(1)});out geom;`);
+      const geo = await overpass(`[out:json][timeout:60];rel(${smallest.id.slice(1)});out geom;`, 75000);
       const rel = (geo.elements || [])[0];
       const ways = ((rel && rel.members) || [])
         .filter((m) => m.type === 'way' && Array.isArray(m.geometry))
