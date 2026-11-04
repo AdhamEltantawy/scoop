@@ -1,3 +1,4 @@
+-- Safe to run again, and also includes my_cells() if 20261102120000 was skipped.
 -- 1. Keep every device's map up to date, not just after a reinstall.
 --    Each hex remembers when the server last saw it change (synced_at), so a
 --    device can fetch only what your other devices uploaded since it last
@@ -8,8 +9,8 @@
 
 -- ---------- 1. changes since you last looked ----------
 
-alter table public.user_cells add column synced_at timestamptz not null default now();
-create index user_cells_synced on public.user_cells (user_id, synced_at);
+alter table public.user_cells add column if not exists synced_at timestamptz not null default now();
+create index if not exists user_cells_synced on public.user_cells (user_id, synced_at);
 
 -- Only real changes count: sync_cells() re-uploading the same values (or only
 -- adding area tags) leaves synced_at alone.
@@ -27,12 +28,14 @@ begin
   return new;
 end $$;
 
+drop trigger if exists user_cells_touch on public.user_cells;
 create trigger user_cells_touch before insert or update on public.user_cells
   for each row execute function public.touch_user_cell();
 
 -- Your own hexes with their visit dates, optionally only those changed after
 -- `since`. Paged by cell: pass the last cell you got as after_cell.
-drop function public.my_cells(text);
+drop function if exists public.my_cells(text);
+drop function if exists public.my_cells(text, timestamptz);
 create function public.my_cells(after_cell text default '', since timestamptz default null)
 returns table (cell text, first_visited timestamptz, last_visited timestamptz, visits int, synced_at timestamptz)
 language sql stable security definer set search_path = public as $$
