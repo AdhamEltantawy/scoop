@@ -376,6 +376,31 @@ select public.sync_cells(jsonb_build_array(
 reset role;
 select test.ok((select country = 'r1' and city = 'r2' from public.user_cells where cell = '8a3e62ba380ffff'),
   'later own-district hexes get their country and city straight away');
+-- Rehab hexes R1–R3: 8a3e62b166f7fff 8a3e62b166affff 8a3e62b1668ffff
+set role authenticated;
+select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-00000000000c', false);
+select public.sync_cells(jsonb_build_array(
+  jsonb_build_object('c', '8a3e62b166f7fff', 't', test.ms(), 'a', '["", "", "r900000000013"]'::jsonb)));
+reset role;
+select test.ok((select country = 'r1' and city = 'r2' from public.user_cells where cell = '8a3e62b166f7fff'),
+  'a district nobody tagged yet borrows from another in the same governorate');
+set role authenticated;
+select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-00000000000d', false);
+select public.sync_cells(jsonb_build_array(
+  jsonb_build_object('c', '8a3e62b166affff', 't', test.ms(), 'a', '["r1", "r77", "r900000000013"]'::jsonb)));
+reset role;
+select test.ok((select city = 'r77' from public.user_cells where cell = '8a3e62b166f7fff')
+    and (select sum(points) from public.score_events where user_id = '00000000-0000-0000-0000-00000000000c'
+      and district = 'r900000000013' and city = 'r77') = 1
+    and not exists (select 1 from public.score_events where district = 'r900000000013' and city <> 'r77'),
+  'its own answer replaces the borrowed one, for hexes and points');
+set role authenticated;
+select public.sync_cells(jsonb_build_array(
+  jsonb_build_object('c', '8a3e62b1668ffff', 't', test.ms(), 'a', '["r1", "r55", "r900000000013"]'::jsonb)));
+reset role;
+select test.ok((select city = 'r77' from public.user_cells where cell = '8a3e62b1668ffff')
+    and (select city = 'r2' from public.user_cells where cell = '8a3e62ba3877fff'),
+  'after that each own district keeps one city');
 set role authenticated;
 select test.throws($$ select * from public.area_parents $$, 'area parents are not readable');
 select test.throws($$ select public.apply_area_parents(array['r900000000012']) $$, 'nor callable');
