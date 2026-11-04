@@ -340,24 +340,38 @@
 
   /**
    * Merge your own hexes and walks from the server into this device's maps
-   * (after a reinstall, or on a second phone). Never deletes or lowers anything:
-   * earliest first visit, latest last visit and highest visit count win.
+   * (after a reinstall, on a second phone, or walks recorded on another device).
+   * Never deletes or lowers anything: earliest first visit, latest last visit
+   * and highest visit count win. Returns how many hexes are new, how many
+   * existing ones changed (walked again elsewhere) and how many walks were added.
    * cellRows: [{ cell, first_visited, last_visited, visits }]
    * walkRows: [{ started_at, ended_at, km, new_cells }]
    */
   function mergeRemote(local, cellRows, walkRows, isValidCell = () => true) {
     const { visited, visits, lastSeen, walks } = local;
     let cells = 0;
+    let warmed = 0;
     for (const r of cellRows || []) {
       const t = Date.parse(r.first_visited);
       if (!r.cell || !isValidCell(r.cell) || !Number.isFinite(t)) continue;
       const l = Math.max(t, Date.parse(r.last_visited) || t);
       const prev = visited.get(r.cell);
+      let changed = false;
       if (prev === undefined) cells++;
-      visited.set(r.cell, prev === undefined ? t : Math.min(prev, t));
+      if (prev === undefined || t < prev) {
+        visited.set(r.cell, prev === undefined ? t : Math.min(prev, t));
+        changed = true;
+      }
       const n = Math.max(1, r.visits | 0);
-      if (n > (visits.get(r.cell) || 1)) visits.set(r.cell, n);
-      if (l > (lastSeen.get(r.cell) || 0)) lastSeen.set(r.cell, l);
+      if (n > (visits.get(r.cell) || 1)) {
+        visits.set(r.cell, n);
+        changed = true;
+      }
+      if (l > (lastSeen.get(r.cell) || 0)) {
+        lastSeen.set(r.cell, l);
+        changed = true;
+      }
+      if (changed && prev !== undefined) warmed++;
     }
     const known = new Set(walks.map((w) => w.start));
     let added = 0;
@@ -370,7 +384,7 @@
       added++;
     }
     if (added) walks.sort((a, b) => a.start - b.start);
-    return { cells, walks: added };
+    return { cells, warmed, walks: added };
   }
 
   /** Top x% from a rank among n people, counting from the middle of your place. */

@@ -45,6 +45,9 @@ explored yet.
 - **Backup / restore** as JSON. Your map lives on your device (`localStorage`).
   If you sign in, it also comes back from your account after a reinstall or on
   a new phone: your hexes, visit counts and walks are merged in, nothing lost.
+  It stays in step across devices too: walk with the phone app and the map in
+  your browser picks it up when you open it, switch back to the tab, or every
+  couple of minutes while it's open (only what changed is downloaded).
 - **Installable and offline**: add it to your home screen and it opens like an app.
 - **Share cards**: turn the part of the map you're looking at, plus your totals,
   into an image for the share sheet. No account needed.
@@ -81,9 +84,10 @@ Sign in with an emailed code to make Scoop social:
   districts, Scoop's own outlines in `districts.geojson` are used instead
   (Greater Cairo and Giza so far). Your home district, city and country are
   where you score the most.
-- **Leaderboards**: your friends, or everyone in your district, city or
-  country, by current score or points earned this week or month. On area
-  boards only you and your friends are named; everyone else is anonymous.
+- **Leaderboards**: your friends, everyone in your district, city or
+  country, or everyone anywhere, by current score or points earned this week
+  or month. Outside the friends board only you and your friends are named;
+  everyone else shows up as an anonymous Explorer.
 - **Challenges**: race invited friends over 1–30 days, wherever they live. Each
   of you is ranked in your own district by the points you earn there, and the
   best percentile wins (6th of 500 beats 3rd of 4).
@@ -93,7 +97,8 @@ Sign in with an emailed code to make Scoop social:
 
 What gets uploaded: hex ids with their first and last visit times, visit
 counts and areas, and walk totals (start, end, km, new hexes). Visit times are
-only used for scoring; nobody, including you, can read them back. **GPS tracks are never uploaded.** See [privacy.html](privacy.html).
+only used for scoring and for restoring your own map on your devices; nobody
+else can read them. **GPS tracks are never uploaded.** See [privacy.html](privacy.html).
 Without an account, nothing changes and nothing leaves your device.
 
 ### Setting up the backend

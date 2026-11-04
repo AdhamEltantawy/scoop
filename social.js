@@ -32,6 +32,11 @@
   const TAB_KEY = 'scoop.tab';
   const PROFILE_COLS = 'id, username, display_name';
   const AREA_WAIT_MS = 3 * 86400000;
+  // How often an open app checks your account for walks from your other devices.
+  const PULL_EVERY_MS = 2 * 60000;
+  // Fetch hexes changed a little before the last one we saw too, in case an
+  // upload that started earlier finished after we looked. Merging is idempotent.
+  const PULL_OVERLAP_MS = 60000;
   const PHOTO_BUCKET = 'checkin-photos';
 
   // Set once signed in (only possible when sb is configured).
@@ -336,6 +341,7 @@
   let syncTimer = null;
   let syncStatus = 'Not synced yet';
   let pullError = null;
+  let lastPull = 0; // when this session last fetched your hexes from your account
 
   function saveSync() {
     saveJSON(SYNC_KEY, syncState);
@@ -355,12 +361,11 @@
     syncing = true;
     try {
       if (syncState.uid !== uid()) syncState = { uid: uid(), cells: {}, walks: [] };
-      if (!syncState.pulled) {
-        // A failed restore must never hold up uploads: try again next sync.
+      if (Date.now() - lastPull >= PULL_EVERY_MS) {
+        // A failed pull must never hold up uploads: try again next sync.
         try {
           await pullFromServer();
-          syncState.pulled = true;
-          saveSync();
+          lastPull = Date.now();
         } catch (err) {
           pullError = err;
         }
@@ -425,38 +430,58 @@
     }
   }
 
-  /** Your own hexes with their dates (the table hides dates, so this goes through my_cells()). */
-  async function fetchMyCells() {
+  /**
+   * Your own hexes with their dates (the table hides dates, so this goes
+   * through my_cells()), all of them or only those changed after `since`.
+   */
+  async function fetchMyCells(since) {
     const out = [];
     for (let after = ''; ;) {
-      const rows = check(await sb.rpc('my_cells', { after_cell: after }));
+      const rows = check(await sb.rpc('my_cells', since ? { after_cell: after, since } : { after_cell: after }));
       out.push(...rows);
       if (rows.length < 1000) return out;
       after = rows[rows.length - 1].cell;
     }
   }
 
+  const plural = (n, word) => `${n.toLocaleString()} ${word}${n === 1 ? '' : word.endsWith('x') ? 'es' : 's'}`;
+
   /**
-   * Bring your hexes and walks back from your account, once per account on
-   * this device: after reinstalling the app or signing in on another phone.
-   * It merges, so nothing on this phone is lost.
+   * Bring in your hexes and walks from your account: after reinstalling the
+   * app, on another phone, and whatever your other devices walked since this
+   * one last looked (the app on your phone, this browser). The first time
+   * everything comes down; after that only what changed. It merges, so
+   * nothing on this device is lost.
    */
   async function pullFromServer() {
+    const first = !syncState.pulledAt;
+    const since = first ? null : new Date(Date.parse(syncState.pulledAt) - PULL_OVERLAP_MS).toISOString();
+    const walkAfter = first ? 0 : syncState.pulledWalk || 0;
     const [cellRows, walkRows] = await Promise.all([
-      fetchMyCells(),
-      fetchAll(() => sb.from('walks').select('started_at, ended_at, km, new_cells').eq('user_id', uid()), 'started_at'),
+      fetchMyCells(since),
+      fetchAll(() => sb.from('walks').select('id, started_at, ended_at, km, new_cells').eq('user_id', uid()).gt('id', walkAfter), 'id'),
     ]);
     const valid = (c) => h3.isValidCell(c) && h3.getResolution(c) === S.BASE_RES;
     const got = core.mergeRemote(S, cellRows, walkRows, valid);
     // Walks already on the server don't need uploading again.
+    const known = new Set(syncState.walks);
     for (const r of walkRows) {
       const start = Date.parse(r.started_at);
-      if (!syncState.walks.includes(start)) syncState.walks.push(start);
+      if (!known.has(start)) syncState.walks.push(start);
     }
-    if (!got.cells && !got.walks) return;
+    let cursor = syncState.pulledAt ? Date.parse(syncState.pulledAt) : 0;
+    for (const r of cellRows) cursor = Math.max(cursor, Date.parse(r.synced_at) || 0);
+    // Older servers don't send synced_at: keep doing full pulls until they do.
+    syncState.pulledAt = cursor ? new Date(cursor).toISOString() : undefined;
+    for (const r of walkRows) syncState.pulledWalk = Math.max(syncState.pulledWalk || 0, Number(r.id) || 0);
+    delete syncState.pulled; // from before pulls were incremental
+    saveSync();
+    if (!got.cells && !got.warmed && !got.walks) return;
     S.saveNow();
     S.render();
-    toast(`Restored from your account · ${got.cells.toLocaleString()} hex${got.cells === 1 ? '' : 'es'}, ${got.walks.toLocaleString()} walk${got.walks === 1 ? '' : 's'}`, 4000);
+    if (!got.cells && !got.walks) return; // only warmed-up hexes: the map shows it
+    const what = [got.cells && plural(got.cells, 'new hex'), got.walks && plural(got.walks, 'walk')].filter(Boolean).join(', ');
+    toast(`${first ? 'Restored from your account' : 'From your other devices'} · ${what}`, 4000);
   }
 
   /** Remove anything now inside a privacy zone from the server, or upload what left one. */
@@ -479,6 +504,16 @@
 
   document.addEventListener('scoop:changed', () => scheduleSync());
   window.addEventListener('online', () => scheduleSync(1000));
+  // Back to the app or tab: pick up walks from your other devices right away.
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden || !profile) return;
+    lastPull = 0;
+    scheduleSync(500);
+  });
+  // And keep checking while it stays open on the map.
+  setInterval(() => {
+    if (!document.hidden && profile) scheduleSync(0);
+  }, PULL_EVERY_MS);
 
   // ---------- auth and identity ----------
 
@@ -1264,7 +1299,7 @@
 
   async function renderRanks(panel) {
     const areas = check(await sb.rpc('my_areas', { period: rankPrefs.period }));
-    const scopes = [['friends', 'Friends'], ...areas.map((a) => [a.kind, `${KIND_LABEL[a.kind]} · ${a.name || '?'}`])];
+    const scopes = [['friends', 'Friends'], ...areas.map((a) => [a.kind, `${KIND_LABEL[a.kind]} · ${a.name || '?'}`]), ['everyone', 'Everyone']];
     if (!scopes.some(([v]) => v === rankPrefs.scope)) rankPrefs.scope = 'friends';
     const savePrefs = () => { saveJSON('scoop.ranks.v2', rankPrefs); renderSocial(); };
     const controls = [
@@ -1288,21 +1323,24 @@
           const me = r.user_id === uid();
           return rankRow(r, { me, friend: !me, name: me ? myName : nameOf(r) });
         })),
-        rows.length < 2 ? h('span', { class: 'body' }, 'Add friends in the Friends tab to compete with them.') : null,
+        rows.length < 2 ? h('span', { class: 'body' }, 'Add friends in the Friends tab to compete with them, or tap Everyone to see all explorers.') : null,
         h('span', { class: 'fine' }, 'Points fade as hexes cool, so the board always reflects recent walking. ' +
           'Check-ins add points too: photo 3, coffee or food 2, meeting a friend 5.'));
       return;
     }
 
-    const home = areas.find((a) => a.kind === rankPrefs.scope);
+    // Everyone: all explorers wherever they walk (area null on the server).
+    const everyone = rankPrefs.scope === 'everyone';
+    const home = everyone ? { id: null, kind: 'everyone' } : areas.find((a) => a.kind === rankPrefs.scope);
     const rows = check(await sb.rpc('area_leaderboard', { area: home.id, period: rankPrefs.period }));
     const mine = rows.find((r) => r.is_me);
     const total = rows.length ? rows[0].total : 0;
+    const where = everyone ? '' : ` in ${home.name}`;
     fill(panel, controls,
       h('div', { class: 'panel tint sm' },
         h('span', { class: 'standing', dir: 'auto' }, mine
-          ? `You're #${mine.rank} of ${Number(total).toLocaleString()} in ${home.name}`
-          : `No points in ${home.name} yet`),
+          ? `You're #${mine.rank} of ${Number(total).toLocaleString()}${everyone ? ' explorers' : where}`
+          : `No points${where} yet`),
         h('span', { class: 'sub' }, mine
           ? `Top ${core.topPercent(mine.rank, total)}%` + (home.kind === 'district' ? ' · your home district' : '')
           : PERIOD_SUB[rankPrefs.period])),

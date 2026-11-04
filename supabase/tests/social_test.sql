@@ -117,6 +117,21 @@ select test.ok(not exists (select 1 from public.my_cells() m
   'and never anyone else''s');
 select test.ok((select count(*) from public.my_cells((select min(cell) from public.my_cells()))) =
   (select count(*) from public.my_cells()) - 1, 'paged by cell');
+-- Other devices fetch only what changed since they last looked.
+select set_config('test.mark', clock_timestamp()::text, false);
+select public.sync_cells(jsonb_build_array(
+  jsonb_build_object('c', '8a3e6281ba1ffff', 't', test.ms('90 days'), 'l', test.ms('90 days'), 'v', 2)));
+select test.ok((select count(*) from public.my_cells('', current_setting('test.mark')::timestamptz)) = 0,
+  'an upload that changes nothing is not a change');
+reset role;
+update public.user_cells set visits = visits + 1 where user_id = auth.uid() and cell = '8a3e6281baaffff';
+update public.user_cells set visits = visits - 1 where user_id = auth.uid() and cell = '8a3e6281baaffff';
+update public.user_cells set district = district where user_id = auth.uid();
+set role authenticated;
+select test.ok((select array_agg(cell) from public.my_cells('', current_setting('test.mark')::timestamptz)) = array['8a3e6281baaffff'],
+  'my_cells(since) returns only hexes changed since then');
+select test.ok((select count(*) from public.my_cells('', null)) = (select count(*) from public.my_cells()), 'no since: everything');
+select test.throws($$ select synced_at from public.user_cells $$, 'change times are not readable either');
 
 select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-00000000000b', false);
 select public.sync_cells(jsonb_build_array(
@@ -240,6 +255,10 @@ select test.ok((select bool_and(user_id is null and display_name is null and not
     from public.area_leaderboard('r10') where rank > 2), 'strangers are anonymous');
 select test.ok((select max(total) from public.area_leaderboard('r10')) = 4, 'and counted');
 select test.ok((select value from public.area_leaderboard('r2') where is_me) = 14, 'city board covers its districts');
+select test.ok((select array_agg(coalesce(username, '?') || ':' || value order by rank, username) from public.area_leaderboard(null))
+    = array['alice:14.00', 'bob:10.00', '?:2.00', '?:1.00'], 'everyone board: everybody with points, wherever they walk; strangers anonymous');
+select test.ok((select value from public.area_leaderboard(null, 'week') where is_me) = (select value from public.leaderboard('week') where username = 'alice'),
+  'everyone board by week');
 select test.ok((select array_agg(kind || ':' || name || ':' || rank || '/' || total order by kind) from public.my_areas())
     = array['city:Cairo:1/4', 'country:Egypt:1/4', 'district:Zamalek:1/4'], 'my home areas and my place in them');
 select test.ok((select district_name || ' ' || district_rank || '/' || district_total from public.friend_stats() where username = 'bob')
