@@ -272,6 +272,15 @@ test('mergeRemote restores hexes and walks without losing local data', () => {
   assert.equal(local.walks[1].points, 2);
 });
 
+test('readyToUpload: hexes in own districts do not wait for OSM', () => {
+  const cutoff = 1000;
+  assert.equal(core.readyToUpload({ l: 5000, a: ['r1', 'r2', 'r3'] }, cutoff), true);           // fully tagged
+  assert.equal(core.readyToUpload({ l: 5000, a: ['', '', 'r900000000012'] }, cutoff), true);    // own district only
+  assert.equal(core.readyToUpload({ l: 5000, a: ['', '', 'r123'] }, cutoff), false);            // OSM district, no country
+  assert.equal(core.readyToUpload({ l: 5000 }, cutoff), false);                                 // nothing known, recent
+  assert.equal(core.readyToUpload({ l: 500 }, cutoff), true);                                   // waited long enough
+});
+
 test('mergeRemote picks up hexes walked again on another device', () => {
   const iso = (ms) => new Date(ms).toISOString();
   const local = {

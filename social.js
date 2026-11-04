@@ -374,6 +374,7 @@
       const areaOf = Areas ? Areas.of : () => null;
       let delta = core.syncDelta(S.visited, S.visitCount, S.lastSeen, areaOf, syncState.cells, isHidden);
       let untagged = 0;
+      let held = 0;
       // Hexes with no country yet still need OSM, even when Scoop's own district is known.
       const needsOsm = (x) => !x.a || !x.a[0];
       if (Areas && delta.some(needsOsm)) {
@@ -381,8 +382,11 @@
         untagged = await Areas.resolve(delta.filter(needsOsm).map((x) => x.c));
         delta = core.syncDelta(S.visited, S.visitCount, S.lastSeen, areaOf, syncState.cells, isHidden);
         // Recent hexes wait for their areas; after a few days they go up without.
+        // In Scoop's own districts they go up right away: the server knows the rest.
         const cutoff = Date.now() - AREA_WAIT_MS;
-        delta = delta.filter((x) => !needsOsm(x) || x.l < cutoff);
+        const before = delta.length;
+        delta = delta.filter((x) => core.readyToUpload(x, cutoff));
+        held = before - delta.length;
       }
       for (const batch of core.chunk(delta, 1000)) {
         const ids = new Set(batch.flatMap((x) => x.a || []).filter(Boolean));
@@ -405,6 +409,7 @@
         saveSync();
       }
       syncStatus = `Synced ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` +
+        (held ? ` · ${held.toLocaleString()} hex${held === 1 ? '' : 'es'} waiting for their area` : '') +
         (pullError ? ` · couldn't restore your map: ${pullError.message}` : '');
       pullError = null;
     } catch (err) {

@@ -82,7 +82,9 @@ Sign in with an emailed code to make Scoop social:
   from OpenStreetMap's administrative boundaries (looked up via the Overpass
   API, cached on the device, never drawn on the map). Where OSM has no
   districts, Scoop's own outlines in `districts.geojson` are used instead
-  (Greater Cairo and Giza so far). Your home district, city and country are
+  (Greater Cairo and Giza so far). Hexes in those upload straight away, and the
+  server fills in their country and city. Elsewhere a hex waits for its OSM
+  lookup, for up to 3 days. Your home district, city and country are
   where you score the most.
 - **Leaderboards**: your friends, everyone in your district, city or
   country, or everyone anywhere, by current score or points earned this week

@@ -350,6 +350,36 @@ select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-00000000000b
 select public.respond_friend_request('00000000-0000-0000-0000-00000000000a', true);
 select test.ok((select count(*) from public.user_cells) = 5, 'friends once more');
 
+-- ---------- own districts: country and city filled in by the server ----------
+-- New Cairo hexes N1–N3: 8a3e62ba3877fff 8a3e62ba382ffff 8a3e62ba380ffff
+select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-00000000000c', false);
+select public.sync_cells(jsonb_build_array(
+  jsonb_build_object('c', '8a3e62ba3877fff', 't', test.ms(), 'a', '["", "", "r900000000012"]'::jsonb)));
+reset role;
+select test.ok((select country is null and district = 'r900000000012' from public.user_cells where cell = '8a3e62ba3877fff'),
+  'own-district hexes upload before their country is known');
+set role authenticated;
+select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-00000000000d', false);
+select public.sync_cells(jsonb_build_array(
+  jsonb_build_object('c', '8a3e62ba382ffff', 't', test.ms(), 'a', '["r1", "r2", "r900000000012"]'::jsonb)));
+reset role;
+select test.ok((select country = 'r1' and city = 'r2' from public.user_cells where cell = '8a3e62ba3877fff'),
+  'a fully tagged upload teaches the server where the district is, and re-tags earlier hexes');
+select test.ok(not exists (select 1 from public.score_events where district = 'r900000000012' and (country = '' or city = ''))
+    and (select sum(points) from public.score_events where district = 'r900000000012'
+      and user_id = '00000000-0000-0000-0000-00000000000c' and country = 'r1' and city = 'r2') = 1,
+  'and moves their points into the country and city');
+set role authenticated;
+select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-00000000000c', false);
+select public.sync_cells(jsonb_build_array(
+  jsonb_build_object('c', '8a3e62ba380ffff', 't', test.ms(), 'a', '["", "", "r900000000012"]'::jsonb)));
+reset role;
+select test.ok((select country = 'r1' and city = 'r2' from public.user_cells where cell = '8a3e62ba380ffff'),
+  'later own-district hexes get their country and city straight away');
+set role authenticated;
+select test.throws($$ select * from public.area_parents $$, 'area parents are not readable');
+select test.throws($$ select public.apply_area_parents(array['r900000000012']) $$, 'nor callable');
+
 -- ---------- anon and account deletion ----------
 reset role;
 set role anon;
