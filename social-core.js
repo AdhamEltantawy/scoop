@@ -339,6 +339,18 @@
   }
 
   /**
+   * Whether a hex from syncDelta() can be uploaded now. It needs its country
+   * (so points land in the right areas), unless it's in one of Scoop's own
+   * districts (the server fills in their country and city) or it has waited
+   * long enough (last visit before `cutoff`).
+   */
+  function readyToUpload(x, cutoff) {
+    if (x.a && (x.a[0] || OWN_DISTRICT.test(x.a[2] || ''))) return true;
+    return x.l < cutoff;
+  }
+  const OWN_DISTRICT = /^r9\d{11}$/;
+
+  /**
    * Merge your own hexes and walks from the server into this device's maps
    * (after a reinstall, on a second phone, or walks recorded on another device).
    * Never deletes or lowers anything: earliest first visit, latest last visit
@@ -424,6 +436,6 @@
     CHECKIN_KINDS, BADGES, KUDOS, DAY_MS, HALF_LIFE_DAYS, CORE_SCALE,
     checkinPoints, regularBonus, heat, hexValue, hexScore, visitGain, inRing, inCore,
     pickAreas, simplifyLine, inWays, waysBox, parseDistricts, districtAt, periodStart, trendBuckets,
-    streaks, localBadges, compare, zoneFilter, cellSig, syncDelta, mergeRemote, topPercent, chunk, validUsername, timeAgo, parseInvite,
+    streaks, localBadges, compare, zoneFilter, cellSig, syncDelta, readyToUpload, mergeRemote, topPercent, chunk, validUsername, timeAgo, parseInvite,
   };
 });
