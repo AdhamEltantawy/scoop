@@ -39,6 +39,10 @@ explored yet.
   3 minutes with no walk running Scoop offers one in a notification. Tap it and
   the walk starts. At most one every 3 hours, none 22:00–07:00, within 30 min of
   a walk you just stopped, or while a walk is recording.
+- **"Looks like you're walking"** (web and app): with the map open and no walk
+  running, a minute of walking pace (60 m or more) shows a banner offering to
+  start one, and that minute counts toward the walk. *Not now* snoozes it for
+  30 min, and it stays quiet for 30 min after a walk ends.
 - **Walk summary**: distance, points, new hexes, hexes warmed back up, time
   and any badge you just earned.
 - **Trends**: new hexes, points or distance per day, week or month. Private:

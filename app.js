@@ -548,8 +548,66 @@
     updateHereHex();
 
     if (walk) recordFix(here, accuracy, pos.timestamp, speed);
+    else noticeWalking(here, accuracy, pos.timestamp, speed);
     updateCard();
   }
+
+  // ---------- "looks like you're walking" banner ----------
+
+  // With the map open but no walk running, watch the GPS fixes we already get.
+  // A minute or more at walking pace shows a banner offering to start a walk,
+  // and that minute is credited to the walk.
+  const NUDGE_WINDOW_MS = 90 * 1000;   // look at this much recent movement
+  const NUDGE_MIN_MS = 60 * 1000;      // ...needing at least this long of it
+  const NUDGE_MIN_METERS = 60;         // ...covering at least this far, as the crow flies
+  const NUDGE_MIN_SPEED = 0.6;         // m/s: slower is standing about or GPS drift
+  const NUDGE_SNOOZE_MS = 30 * 60 * 1000; // after "not now", or after a walk ends
+  const NUDGE_HIDE_MS = 3 * 60 * 1000; // banner goes away on its own
+  const NUDGE_SNOOZE_KEY = 'scoop.nudgeSnooze.v1';
+  let nudgeFixes = [];
+  let nudgeTimer = null;
+
+  function nudgeSnoozedUntil() {
+    try { return Number(localStorage.getItem(NUDGE_SNOOZE_KEY)) || 0; } catch (e) { return 0; }
+  }
+  function snoozeNudge() {
+    try { localStorage.setItem(NUDGE_SNOOZE_KEY, String(Date.now() + NUDGE_SNOOZE_MS)); } catch (e) { /* fine */ }
+  }
+
+  function noticeWalking(here, accuracy, time, speed) {
+    if (accuracy > Math.min(settings.accuracy, 40)) return;
+    nudgeFixes.push({ latlng: here, accuracy, time, speed });
+    while (nudgeFixes.length && time - nudgeFixes[0].time > NUDGE_WINDOW_MS) nudgeFixes.shift();
+    if (!$('nudge').hidden || Date.now() < nudgeSnoozedUntil() || document.visibilityState !== 'visible') return;
+    const first = nudgeFixes[0];
+    const secs = (time - first.time) / 1000;
+    if (secs * 1000 < NUDGE_MIN_MS) return;
+    const meters = haversine(first.latlng, here);
+    const pace = meters / secs;
+    if (meters < NUDGE_MIN_METERS || pace < NUDGE_MIN_SPEED || pace > SPEED_LIMITS[settings.activity]) return;
+    showNudge();
+  }
+
+  function showNudge() {
+    $('nudge').hidden = false;
+    clearTimeout(nudgeTimer);
+    nudgeTimer = setTimeout(hideNudge, NUDGE_HIDE_MS);
+  }
+
+  function hideNudge() {
+    clearTimeout(nudgeTimer);
+    $('nudge').hidden = true;
+  }
+
+  $('btnNudgeStart').addEventListener('click', () => {
+    const backfill = nudgeFixes.slice();
+    hideNudge();
+    if (!walk) startWalk({ backfill });
+  });
+  $('btnNudgeClose').addEventListener('click', () => {
+    snoozeNudge();
+    hideNudge();
+  });
 
   /** Best guess at current speed in m/s, or null if not enough data yet. */
   function currentSpeed(time, reported) {
@@ -840,10 +898,12 @@
     return local;
   }
 
-  function startWalk() {
+  function startWalk({ backfill = [] } = {}) {
     if (!isNative && !ensureWatching()) return;
     closeSheet();
-    walk = newWalk(Date.now());
+    hideNudge();
+    nudgeFixes = [];
+    walk = newWalk(backfill.length ? backfill[0].time : Date.now());
     follow = true;
     pendingCenter = !lastPos;
     document.body.classList.add('walking');
@@ -854,9 +914,12 @@
       stopWebWatch();
       startNativeWatcher();
     }
-    if (lastPos) {
-      map.setView(lastPos.latlng, Math.max(map.getZoom(), 16));
-      if (Date.now() - lastPos.time < 30000) recordFix(lastPos.latlng, lastPos.accuracy, Date.now(), null);
+    if (lastPos) map.setView(lastPos.latlng, Math.max(map.getZoom(), 16));
+    if (backfill.length) {
+      // Started from the banner: the stretch you'd already walked counts.
+      for (const f of backfill) recordFix(f.latlng, f.accuracy, f.time, f.speed);
+    } else if (lastPos && Date.now() - lastPos.time < 30000) {
+      recordFix(lastPos.latlng, lastPos.accuracy, Date.now(), null);
     }
     if (isNative) toast('Walk started · you can lock your phone');
     tellReminder(true);
@@ -878,6 +941,8 @@
     walk = null;
     clearInterval(ticker);
     tellReminder(false);
+    nudgeFixes = [];
+    snoozeNudge(); // you're likely still on your feet; don't ask straight away
     saveNow();
     emit('changed', { walk: summary });
     document.body.classList.remove('walking');
