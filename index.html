@@ -86,6 +86,12 @@
     </button>
   </nav>
 
+  <div class="nudge" id="nudge" role="status" aria-live="polite" hidden>
+    <div class="nudge-text"><b>Looks like you're walking</b><small>Start a walk and the last minute counts too.</small></div>
+    <button class="btn sm" id="btnNudgeStart">Start</button>
+    <button class="icon-btn sm" id="btnNudgeClose" aria-label="Not now">✕</button>
+  </div>
+
   <nav class="bottom-row" aria-label="Main">
     <button class="round avatar-btn idle-only" id="btnMe" aria-label="Me"><span id="meInitial">·</span></button>
     <span class="spacer walk-only" aria-hidden="true"></span>
