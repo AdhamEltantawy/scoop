@@ -34,6 +34,11 @@ explored yet.
   showing how much of your map you've walked recently. While walking, the card
   shows the walk's state: waiting for GPS, warming up (the first 100 m),
   recording (new hexes and distance) or paused (moving too fast).
+- **Walk reminders** (Android app, opt-in): forgot to tap *Start walk*? The
+  phone's activity detection (motion, not GPS) notices you walking, and after
+  3 minutes with no walk running Scoop offers one in a notification. Tap it and
+  the walk starts. At most one every 3 hours, none 22:00–07:00, within 30 min of
+  a walk you just stopped, or while a walk is recording.
 - **Walk summary**: distance, points, new hexes, hexes warmed back up, time
   and any badge you just earned.
 - **Trends**: new hexes, points or distance per day, week or month. Private:

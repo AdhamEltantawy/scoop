@@ -453,6 +453,9 @@
   const App = plugin('App');
   const Filesystem = plugin('Filesystem');
   const Share = plugin('Share');
+  // Our own plugin (android/.../WalkReminderPlugin.java): notices walking, offers to start a walk.
+  const WalkReminder = plugin('WalkReminder');
+  const tellReminder = (active) => { if (WalkReminder) WalkReminder.setWalking({ active }).catch(() => {}); };
 
   // ---------- location ----------
 
@@ -856,6 +859,7 @@
       if (Date.now() - lastPos.time < 30000) recordFix(lastPos.latlng, lastPos.accuracy, Date.now(), null);
     }
     if (isNative) toast('Walk started · you can lock your phone');
+    tellReminder(true);
     clearInterval(ticker);
     ticker = setInterval(updateCard, 1000);
     scheduleRender();
@@ -873,6 +877,7 @@
     if (saved) walks.push(summary);
     walk = null;
     clearInterval(ticker);
+    tellReminder(false);
     saveNow();
     emit('changed', { walk: summary });
     document.body.classList.remove('walking');
@@ -912,8 +917,62 @@
         badge ? el('div', { class: 'new-badge' },
           el('div', { class: 'hex-badge hot' }, badge.glyph),
           el('div', {}, el('b', {}, `New badge: ${badge.label}`), el('small', {}, badge.desc))) : null,
+        reminderOffer(),
         el('button', { class: 'btn', onclick: closeSheet }, 'Done')));
     openSheet('summarySheet');
+  }
+
+  // ---------- walk reminders (Android app) ----------
+
+  // The phone notices you walking (activity recognition, not GPS) and, after a
+  // few minutes without a walk running, offers one in a notification.
+  const REMINDER_ASKED_KEY = 'scoop.reminderAsked.v1';
+  let reminderOn = false;
+
+  async function refreshReminder() {
+    if (!WalkReminder) return;
+    try {
+      const s = await WalkReminder.getStatus();
+      reminderOn = !!(s.enabled && s.activityAllowed && s.notificationsAllowed);
+    } catch (e) {
+      reminderOn = false;
+    }
+    $('btnReminder').setAttribute('aria-checked', String(reminderOn));
+  }
+
+  async function setReminder(on) {
+    if (!WalkReminder) return;
+    try {
+      const s = on ? await WalkReminder.enable() : await WalkReminder.disable();
+      reminderOn = !!(s.enabled && s.activityAllowed && s.notificationsAllowed);
+      if (on && !reminderOn) {
+        toast('Allow physical activity and notifications for Scoop in Android settings', 4000);
+      } else if (on) {
+        toast("We'll ask when you're out walking");
+      }
+    } catch (e) {
+      toast("Couldn't change walk reminders");
+    }
+    $('btnReminder').setAttribute('aria-checked', String(reminderOn));
+  }
+
+  // A one-time offer on the walk summary, once you've seen what a walk is worth.
+  function reminderOffer() {
+    if (!WalkReminder || reminderOn || loadJSON(REMINDER_ASKED_KEY, false)) return null;
+    saveJSON(REMINDER_ASKED_KEY, true);
+    const box = el('div', { class: 'reminder-offer' },
+      el('div', {}, el('b', {}, 'Forget to tap Start?'),
+        el('small', {}, "Scoop can notice when you're walking and offer to start a walk.")),
+      el('button', {
+        class: 'btn sm',
+        onclick: async () => { await setReminder(true); box.remove(); },
+      }, 'Remind me'));
+    return box;
+  }
+
+  function startWalkFromReminder() {
+    if (walk) return;
+    startWalk();
   }
 
   function locate() {
@@ -1143,6 +1202,7 @@
 
   function openSettings() {
     emit('settings-open', {});
+    refreshReminder();
     openSheet('settingsSheet');
   }
 
@@ -1414,6 +1474,18 @@
 
   if (isNative) {
     $('walkTip').textContent = 'Walks keep recording with the screen off — look for the notification.';
+  }
+
+  if (WalkReminder) {
+    $('btnReminder').hidden = false;
+    $('reminderTip').hidden = false;
+    $('btnReminder').addEventListener('click', () => setReminder(!reminderOn));
+    refreshReminder();
+    // A walk never survives the app restarting, so clear any flag left behind.
+    tellReminder(false);
+    // Opened (or brought back) from the reminder's "Start walk".
+    WalkReminder.addListener('startWalk', startWalkFromReminder);
+    WalkReminder.takeStartRequest().then((r) => { if (r && r.start) startWalkFromReminder(); }).catch(() => {});
   }
 
   // Android back button: close whatever is open, otherwise send the app to the

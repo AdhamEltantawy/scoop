@@ -159,6 +159,8 @@
       <div class="seg tall" id="segActivity" role="radiogroup" aria-label="Count hexes when"></div>
       <span class="sublabel">Ignore GPS fixes worse than</span>
       <div class="seg" id="segAccuracy" role="radiogroup" aria-label="Ignore GPS fixes worse than"></div>
+      <button class="toggle-row" id="btnReminder" role="switch" aria-checked="false" hidden><span>Remind me to start a walk<small>When your phone notices you walking</small></span><span class="switch"><span></span></span></button>
+      <span class="fine" id="reminderTip" hidden>Uses Android's activity detection, not GPS. At most one reminder every 3 hours, never at night or during a walk.</span>
       <span class="fine" id="walkTip">Keep the screen on while walking: phones pause location in background tabs.</span>
     </div>
     <div class="block">
