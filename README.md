@@ -236,5 +236,6 @@ location to web apps once the screen locks.
 | `vendor/` | Leaflet 1.9.4, h3-js 4.1.0, supabase-js 2.117.2, Capacitor core runtime (with licenses) |
 | `android/`, `capacitor.config.json`, `scripts/build-web.mjs` | Android app (Capacitor) |
 | `assets/` | Source images for the Android icon and splash screen |
+| `docs/production-plan.md` | What has to change before a public launch, in order |
 
 Map tiles © OpenStreetMap contributors (or © Esri, depending on the map style you pick).
