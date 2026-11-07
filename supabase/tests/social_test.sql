@@ -405,6 +405,67 @@ set role authenticated;
 select test.throws($$ select * from public.area_parents $$, 'area parents are not readable');
 select test.throws($$ select public.apply_area_parents(array['r900000000012']) $$, 'nor callable');
 
+-- ---------- landmarks ----------
+-- alice (Z1–Z3) and bob are friends; carol is a stranger to both.
+set role authenticated;
+select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-00000000000a', false);
+select test.throws($$ insert into public.landmarks (cell, kind, title) values ('8a1fb466249ffff', 'view', 'Nope') $$,
+  'cannot leave a landmark on an unwalked hex');
+select test.throws($$ insert into public.landmarks (cell, kind, title) values ('8a3e6281ba1ffff', 'castle', 'Nope') $$,
+  'kind is checked');
+select test.throws($$ insert into public.landmarks (cell, kind, title) values ('8a3e6281ba1ffff', 'view', '   ') $$,
+  'a title is needed');
+insert into public.landmarks (cell, kind, title, note) values ('8a3e6281ba1ffff', 'view', '  Nile view ', '  Best at sunset ');
+select test.throws($$ insert into public.landmarks (cell, kind, title) values ('8a3e6281ba1ffff', 'art', 'Again') $$,
+  'one landmark of yours per hex');
+select test.throws($$ insert into public.landmarks (user_id, cell, kind, title)
+  values ('00000000-0000-0000-0000-00000000000b', '8a3e6281baaffff', 'art', 'Forged') $$, 'cannot leave one as someone else');
+select test.ok((select title = 'Nile view' and note = 'Best at sunset' from public.landmarks), 'title and note are trimmed');
+select test.ok((select author = 'Alice' and mine and finds = 0 from public.landmarks_near(array[public.h3_to_parent('8a3e6281ba1ffff', 7)])),
+  'your own landmark shows up near you');
+select test.ok((select count(*) from public.landmarks_near(array[public.h3_to_parent('8a1fb466249ffff', 7)])) = 0,
+  'only landmarks in the blocks asked for');
+select test.throws($$ select public.find_landmark((select id from public.landmarks)) $$, 'cannot find your own landmark');
+reset role;
+create temp table the_landmark as select id from public.landmarks;
+grant select on the_landmark to authenticated;
+-- The limit: fill alice up with landmarks on hexes she walked.
+insert into public.user_cells (user_id, cell, first_visited, last_visited)
+  select '00000000-0000-0000-0000-00000000000a', '8a3e6281b' || lpad(to_hex(i), 2, '0') || '7fff', now(), now()
+  from generate_series(1, 30) i on conflict do nothing;
+set role authenticated;
+insert into public.landmarks (cell, kind, title)
+  select '8a3e6281b' || lpad(to_hex(i), 2, '0') || '7fff', 'gem', 'Spot ' || i from generate_series(1, 24) i;
+select test.throws($$ insert into public.landmarks (cell, kind, title) values ('8a3e6281b1e7fff', 'gem', 'One too many') $$,
+  'at most 25 landmarks out at once');
+delete from public.landmarks where title like 'Spot %';
+select test.ok((select count(*) from public.my_landmarks()) = 1, 'deleting your own landmarks');
+
+select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-00000000000c', false);
+select test.ok((select count(*) from public.landmarks) = 0, 'other explorers'' landmarks are not readable directly');
+select test.ok((select author is null and not mine and not found_by_me and title = 'Nile view'
+    from public.landmarks_near(array[public.h3_to_parent('8a3e6281ba1ffff', 7)])),
+  'strangers see the landmark but not who left it');
+select test.ok((select finds = 1 and first_time from public.find_landmark((select id from the_landmark))), 'finding a landmark');
+select test.ok((select finds = 1 and not first_time from public.find_landmark((select id from the_landmark))), 'finding it again counts once');
+select test.ok((select found_by_me and finds = 1 from public.landmarks_near(array[public.h3_to_parent('8a3e6281ba1ffff', 7)])),
+  'found shows up near you');
+select test.throws($$ select * from public.landmark_finds $$, 'finds are not readable directly');
+select test.throws($$ insert into public.landmark_finds (landmark_id, user_id) values ((select id from the_landmark), auth.uid()) $$,
+  'no direct finds');
+delete from public.landmarks where id = (select id from the_landmark);
+select test.throws($$ select public.find_landmark(-1) $$, 'finding a landmark that is gone');
+select test.throws($$ select * from public.landmarks_near(array_fill('873e6281bffffff'::text, array[51])) $$, 'too many blocks');
+
+select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-00000000000b', false);
+select test.ok((select author = 'Alice' from public.landmarks_near(array[public.h3_to_parent('8a3e6281ba1ffff', 7)])),
+  'friends see who left it');
+select public.find_landmark((select id from the_landmark));
+select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-00000000000a', false);
+select test.ok((select finds = 2 and last_found is not null from public.my_landmarks()), 'the author sees how many found it');
+select test.ok(exists (select 1 from public.landmarks where id = (select id from the_landmark)),
+  'a stranger could not delete it');
+
 -- ---------- anon and account deletion ----------
 reset role;
 set role anon;
@@ -412,6 +473,7 @@ select set_config('request.jwt.claim.sub', '', false);
 select test.throws($$ select * from public.profiles $$, 'anon has no table access');
 select test.throws($$ select public.leaderboard() $$, 'anon cannot call the API');
 select test.throws($$ select * from public.my_cells() $$, 'anon cannot read hexes');
+select test.throws($$ select * from public.landmarks_near(array['873e6281bffffff']) $$, 'anon cannot read landmarks');
 select test.throws($$ select * from public.areas $$, 'anon cannot read areas');
 
 reset role;
@@ -423,5 +485,6 @@ select test.ok(not exists (select 1 from public.profiles where username = 'bob')
 select test.ok(not exists (select 1 from public.user_cells where user_id = '00000000-0000-0000-0000-00000000000b'), 'and the cells');
 select test.ok(not exists (select 1 from public.score_events where user_id = '00000000-0000-0000-0000-00000000000b'), 'and the score log');
 select test.ok((select met_with from public.checkins where kind = 'meetup') is null, 'and unlinks meetups');
+select test.ok((select count(*) from public.landmark_finds) = 1, 'and their landmark finds');
 
 \echo 'All social schema tests passed'

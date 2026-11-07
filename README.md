@@ -67,8 +67,8 @@ explored yet.
 
 Everything happens over the map. Start or stop a walk at the bottom, open
 **Me** (score, streaks, trends, badges, areas; the gear opens Settings) on the
-left and **Friends** (Feed, Friends, Ranks, Challenges) on the right. Locate
-and Check in sit on the right edge. Destructive actions (clearing your map,
+left and **Friends** (Feed, Friends, Ranks, Challenges) on the right. Check in,
+Leave a landmark and Locate sit on the right edge. Destructive actions (clearing your map,
 removing a friend, deleting a challenge or your account) ask in a centred
 dialog. Colour roles: green is for walking now and actions, ember for heat
 only, blue for friends only. The app follows the system light or dark mode.
@@ -103,6 +103,17 @@ Sign in with an emailed code to make Scoop social:
 - **Challenges**: race invited friends over 1–30 days, wherever they live. Each
   of you is ranked in your own district by the points you earn there, and the
   best percentile wins (6th of 500 beats 3rd of 4).
+- **Landmarks**: leave a note on a hex you've walked (a viewpoint, a bit of
+  history, street art, nature, food, a hidden gem) with a title and an
+  optional note, using the flag button on the right edge. When another explorer
+  passes through that hex, walking or just with the map open, Scoop tells them
+  with a banner (and, in the Android app with the screen off during a walk, a
+  notification). *Check it* opens the landmark and checks it off. On the map,
+  landmarks you haven't found yet show as **?**. You see how many explorers
+  found each of yours. Everyone signed in can find landmarks, but only you and
+  your friends see who left one. Up to 25 out at once, one per hex; none
+  inside privacy zones. You're told about a landmark once every 12 hours at
+  most, and only once you're well inside its hex.
 - **Community map**: street hexes explored by you and your friends, plus who
   got there first.
 - **Badges and streaks**: 12 badges, plus your current and best daily walking streak.
