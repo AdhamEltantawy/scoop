@@ -550,6 +550,8 @@
     if (walk) recordFix(here, accuracy, pos.timestamp, speed);
     else noticeWalking(here, accuracy, pos.timestamp, speed);
     updateCard();
+    // Landmarks (social.js) watch where you are, walk or not.
+    emit('fix', { latlng: here, accuracy, time: pos.timestamp });
   }
 
   // ---------- "looks like you're walking" banner ----------
@@ -1575,7 +1577,7 @@
 
   // Used by social.js (community features) and handy for debugging from the console.
   window.scoop = {
-    BASE_RES, COLORS, HEAT_BANDS, map, visited, visits, visitCount, lastSeen, walks, settings, isNative, Filesystem, Share, App,
+    BASE_RES, COLORS, HEAT_BANDS, map, visited, visits, visitCount, lastSeen, walks, settings, isNative, Filesystem, Share, App, WalkReminder,
     render, scheduleRender, toast, formatNum, cellAreaCached, haversine, openSheet, closeSheet, saveNow, emit,
     hexScoreTotal, hexLayer, confirmDialog, segmented, el, fill: fillEl, setIdentity, openMe, openSettings,
     startWalk, locate, earnedBadges, renderBadges,

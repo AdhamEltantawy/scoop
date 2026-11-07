@@ -297,3 +297,26 @@ test('mergeRemote picks up hexes walked again on another device', () => {
   assert.equal(local.visits.get('a'), 2);
   assert.equal(local.lastSeen.get('a'), 7000);
 });
+
+test('landmarkToAlert: someone else\'s, not found yet, not told recently', () => {
+  const H = 3600000;
+  const now = 100 * H;
+  const mine = { id: 1, mine: true };
+  const found = { id: 2, found_by_me: true };
+  const toldEarlier = { id: 3 };
+  const fresh = { id: 4 };
+  assert.equal(core.landmarkToAlert([mine, found, toldEarlier, fresh], { 3: now - H }, now), fresh);
+  assert.equal(core.landmarkToAlert([mine, found, toldEarlier], { 3: now - H }, now), null);
+  assert.equal(core.landmarkToAlert([toldEarlier], { 3: now - 13 * H }, now), toldEarlier, 'told again after 12 h');
+  assert.equal(core.landmarkToAlert(undefined, {}, now), null);
+});
+
+test('pruneAlerted forgets old alerts', () => {
+  const H = 3600000;
+  assert.deepEqual(core.pruneAlerted({ 1: 100 * H - H, 2: 100 * H - 13 * H }, 100 * H), { 1: 99 * H });
+});
+
+test('ordinal', () => {
+  assert.deepEqual([1, 2, 3, 4, 11, 12, 13, 21, 22, 101, 111].map(core.ordinal),
+    ['1st', '2nd', '3rd', '4th', '11th', '12th', '13th', '21st', '22nd', '101st', '111th']);
+});

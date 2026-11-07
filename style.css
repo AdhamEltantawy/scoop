@@ -136,6 +136,12 @@ body[data-phase="warm"] .phase-warm, body[data-phase="rec"] .phase-rec { gap: 10
 .nudge .btn { flex: none; }
 .nudge .icon-btn { flex: none; }
 body.walking .nudge { display: none; }
+/* Landmarks are found while walking, so this one stays up during a walk. */
+body.walking .nudge.landmark-alert { display: flex; }
+.landmark-alert { border: 2px solid var(--accent); animation: rise .25s ease-out; }
+.landmark-alert-icon { flex: none; font-size: 24px; line-height: 1; }
+/* Keep the map buttons clear of it. */
+body.landmark-alert-on .edge-controls { bottom: calc(180px + var(--safe-bottom)); }
 
 /* ---------- toast ---------- */
 
@@ -640,6 +646,21 @@ div.list-row { cursor: default; }
   box-shadow: 0 1px 3px rgba(0, 0, 0, .3);
 }
 .checkin-bubble.mine { border-color: var(--accent); }
+
+.landmark-pin {
+  display: grid; place-items: center; font-size: 17px;
+  background: var(--surface); border: 2px solid var(--accent); border-radius: 8px;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, .3);
+}
+.landmark-pin.unfound { font: 700 16px/1 var(--font-display); color: var(--muted); border-style: dashed; border-color: var(--muted); }
+.landmark-pin.found { border-color: var(--friend); }
+
+/* ---------- landmark sheet ---------- */
+
+.landmark-card { display: flex; flex-direction: column; gap: 6px; }
+.landmark-card .emoji { font-size: 34px; line-height: 1; }
+.landmark-card .note { font-size: 15px; white-space: pre-wrap; overflow-wrap: anywhere; }
+textarea.input { height: auto; min-height: 76px; padding: 12px 14px; resize: vertical; font-family: inherit; font-size: 15px; }
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; }

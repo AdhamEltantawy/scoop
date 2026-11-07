@@ -507,11 +507,13 @@
       for (const batch of core.chunk(hidden, 200)) {
         check(await sb.from('user_cells').delete().eq('user_id', uid()).in('cell', batch));
         check(await sb.from('checkins').delete().eq('user_id', uid()).in('cell', batch));
+        check(await sb.from('landmarks').delete().eq('user_id', uid()).in('cell', batch));
         for (const c of batch) delete syncState.cells[c];
         saveSync();
       }
       await sync();
       loadCheckinMarkers();
+      reloadLandmarks();
     } catch (err) {
       fail(err);
     }
@@ -574,6 +576,7 @@
     }
     updateIdentity();
     if (profile) onProfileReady();
+    else reloadLandmarks(); // signed out: clear them
     if (S.currentSheet() === 'signinSheet') {
       if (profile) {
         S.closeSheet();
@@ -591,6 +594,7 @@
     acceptPendingInvite();
     loadCheckinMarkers();
     loadHomes();
+    reloadLandmarks();
   }
 
   // Fires once at startup with the saved session (or null), then on every change.
@@ -1596,8 +1600,8 @@
   });
 
   /** One pattern for every reason you can't check in: glyph, title, why, one action and "Not now". */
-  function blocked(glyph, title, body, action, onAction) {
-    fill($('checkinBody'), h('div', { class: 'stack' },
+  function blocked(glyph, title, body, action, onAction, target = 'checkinBody') {
+    fill($(target), h('div', { class: 'stack' },
       h('div', { class: 'blocked' },
         h('div', { class: 'hex-badge quiet', 'aria-hidden': 'true' }, glyph),
         h('span', { class: 'card-title' }, title),
@@ -1718,6 +1722,401 @@
     const canvas = h('canvas', { width: Math.round(img.width * scale), height: Math.round(img.height * scale) });
     canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
     return new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.8));
+  }
+
+  // ---------- landmarks ----------
+
+  // Explorers leave landmarks on hexes they've walked: a viewpoint, a bit of
+  // history, street art… When you pass through a hex with someone else's
+  // landmark, the app tells you (a banner, and a notification in the Android
+  // app when the screen is off) and you can check it off. The author sees how
+  // many explorers found it. Only you and your friends see who left one.
+  const LANDMARK_BLOCK_RES = 7;             // fetch the ~5 km² block you're in and the ring around it
+  const LANDMARK_REFRESH_MS = 10 * 60000;
+  const LANDMARK_RETRY_MS = 60000;
+  const LANDMARK_MAX_ACCURACY = 35;         // metres: a vaguer fix could be the hex next door
+  const LANDMARK_ALERT_HIDE_MS = 10 * 60000;
+  const LANDMARK_CHECK_WINDOW_MS = 30 * 60000; // after being told, you can still check it off from afar
+  const LANDMARK_ZOOM = 15;
+  const LANDMARK_LIMIT = 25;                // keep in sync with landmark_limit() in the migration
+  const LANDMARK_ALERTS_KEY = 'scoop.landmarkAlerts.v1';
+  const Notifier = S.WalkReminder;          // the Android app's own plugin also posts landmark notifications
+
+  /** @type {Map<string, object[]>} cell → landmarks there */
+  let landmarksByCell = new Map();
+  /** @type {Map<number, object>} */
+  let landmarksById = new Map();
+  let landmarkBlocks = new Set();
+  let landmarksLoadedAt = 0;
+  let landmarksLoading = false;
+  let landmarkAlerts = core.pruneAlerted(loadJSON(LANDMARK_ALERTS_KEY, {}));
+  let alertedLandmark = null;
+  let landmarkAlertTimer = null;
+  const landmarkLayer = L.layerGroup();
+  const kindOf = (l) => core.LANDMARK_KINDS[l.kind] || { icon: '⚑', label: 'Landmark' };
+  const blockOf = (lat, lng) => h3.latLngToCell(lat, lng, LANDMARK_BLOCK_RES);
+
+  async function loadLandmarks(block) {
+    if (!profile || !block || landmarksLoading) return;
+    landmarksLoading = true;
+    const disk = h3.gridDisk(block, 1);
+    try {
+      const rows = check(await sb.rpc('landmarks_near', { blocks: disk }));
+      landmarksByCell = new Map();
+      landmarksById = new Map();
+      for (const r of rows) {
+        r.id = Number(r.id);
+        r.finds = Number(r.finds) || 0;
+        if (!landmarksByCell.has(r.cell)) landmarksByCell.set(r.cell, []);
+        landmarksByCell.get(r.cell).push(r);
+        landmarksById.set(r.id, r);
+      }
+      landmarkBlocks = new Set(disk);
+      landmarksLoadedAt = Date.now();
+      drawLandmarks();
+      const pos = S.position();
+      if (pos) lookHere(pos.latlng, pos.accuracy);
+    } catch (err) {
+      // Offline or not signed in any more: try again in a minute.
+      landmarksLoadedAt = Date.now() - LANDMARK_REFRESH_MS + LANDMARK_RETRY_MS;
+    } finally {
+      landmarksLoading = false;
+    }
+  }
+
+  /** Load around you, or around the map when there's no GPS fix. */
+  function reloadLandmarks() {
+    if (!profile) {
+      landmarksByCell = new Map();
+      landmarksById = new Map();
+      landmarkBlocks = new Set();
+      drawLandmarks();
+      return;
+    }
+    const pos = S.position();
+    const at = pos ? pos.latlng : map.getCenter();
+    landmarksLoadedAt = 0;
+    loadLandmarks(blockOf(at.lat, at.lng));
+  }
+
+  function drawLandmarks() {
+    landmarkLayer.clearLayers();
+    for (const l of landmarksById.values()) {
+      const kind = kindOf(l);
+      const secret = !l.mine && !l.found_by_me;
+      L.marker(h3.cellToLatLng(l.cell), {
+        icon: L.divIcon({
+          className: `landmark-pin${l.mine ? ' mine' : secret ? ' unfound' : ' found'}`,
+          html: secret ? '?' : kind.icon,
+          iconSize: [30, 30],
+        }),
+        title: secret ? 'A landmark · walk through this hex to check it' : l.title,
+        zIndexOffset: 500,
+      }).on('click', () => openLandmark(l)).addTo(landmarkLayer);
+    }
+    toggleLandmarks();
+  }
+
+  function toggleLandmarks() {
+    const on = !!profile && map.getZoom() >= LANDMARK_ZOOM;
+    if (on && !map.hasLayer(landmarkLayer)) landmarkLayer.addTo(map);
+    if (!on && map.hasLayer(landmarkLayer)) map.removeLayer(landmarkLayer);
+  }
+  map.on('zoomend', toggleLandmarks);
+  // Browsing the map without GPS: show the landmarks where you're looking.
+  map.on('moveend', () => {
+    if (!profile || map.getZoom() < LANDMARK_ZOOM) return;
+    const pos = S.position();
+    if (pos && Date.now() - pos.time < 2 * 60000) return;
+    const c = map.getCenter();
+    const block = blockOf(c.lat, c.lng);
+    if (!landmarkBlocks.has(block) || Date.now() - landmarksLoadedAt > LANDMARK_REFRESH_MS) loadLandmarks(block);
+  });
+
+  // Every GPS fix, walk or not: keep the landmarks around you loaded and look
+  // for one in the hex you're in.
+  document.addEventListener('scoop:fix', (e) => {
+    if (!profile) return;
+    const { latlng, accuracy } = e.detail;
+    const block = blockOf(latlng.lat, latlng.lng);
+    if (!landmarkBlocks.has(block) || Date.now() - landmarksLoadedAt > LANDMARK_REFRESH_MS) loadLandmarks(block);
+    lookHere(latlng, accuracy);
+  });
+
+  function lookHere(latlng, accuracy) {
+    if (!landmarksByCell.size || accuracy > LANDMARK_MAX_ACCURACY) return;
+    const cell = h3.latLngToCell(latlng.lat, latlng.lng, S.BASE_RES);
+    const here = landmarksByCell.get(cell);
+    if (!here) return;
+    // Like hexes, only once you're well inside it: no alerts from walking along the edge.
+    if (!core.inCore(latlng.lat, latlng.lng, h3.cellToLatLng(cell), h3.cellToBoundary(cell))) return;
+    const l = core.landmarkToAlert(here, landmarkAlerts);
+    if (l) alertLandmark(l);
+  }
+
+  function alertLandmark(l) {
+    landmarkAlerts[l.id] = Date.now();
+    landmarkAlerts = core.pruneAlerted(landmarkAlerts);
+    saveJSON(LANDMARK_ALERTS_KEY, landmarkAlerts);
+    alertedLandmark = l;
+    const kind = kindOf(l);
+    const by = l.author ? `left by ${l.author}` : 'left by another explorer';
+    $('landmarkAlertIcon').textContent = kind.icon;
+    $('landmarkAlertTitle').textContent = l.title;
+    $('landmarkAlertSub').textContent = `Landmark here · ${by}`;
+    $('landmarkAlert').hidden = false;
+    document.body.classList.add('landmark-alert-on');
+    clearTimeout(landmarkAlertTimer);
+    landmarkAlertTimer = setTimeout(hideLandmarkAlert, LANDMARK_ALERT_HIDE_MS);
+    try {
+      // Browsers only allow it once you've tapped the page.
+      const tapped = !navigator.userActivation || navigator.userActivation.hasBeenActive;
+      if (navigator.vibrate && tapped) navigator.vibrate([80, 60, 80]);
+    } catch (e) {
+      // Not supported: the banner is enough.
+    }
+    // Screen off (the Android app keeps walking in the background): a notification.
+    if (Notifier && document.hidden) {
+      Notifier.notifyLandmark({ id: l.id, title: `${kind.icon} ${l.title}`, text: `A landmark here, ${by}. Tap to check it.` })
+        .catch(() => {});
+    }
+  }
+
+  function hideLandmarkAlert() {
+    clearTimeout(landmarkAlertTimer);
+    $('landmarkAlert').hidden = true;
+    document.body.classList.remove('landmark-alert-on');
+    alertedLandmark = null;
+  }
+
+  $('btnLandmarkCheck').addEventListener('click', () => {
+    const l = alertedLandmark;
+    hideLandmarkAlert();
+    if (l) openLandmark(l);
+  });
+  $('btnLandmarkLater').addEventListener('click', hideLandmarkAlert);
+
+  /** Opened from a landmark notification (Android). */
+  function openLandmarkById(id) {
+    const l = landmarksById.get(Number(id));
+    if (l) {
+      hideLandmarkAlert();
+      openLandmark(l);
+    } else {
+      toast("That landmark isn't around any more");
+    }
+  }
+  if (Notifier) {
+    Notifier.addListener('openLandmark', (r) => r && r.id && openLandmarkById(r.id));
+    // Opened from the notification while the app wasn't running: wait for the
+    // landmarks around you before showing it.
+    Notifier.takeLandmarkRequest().then((r) => {
+      if (!r || !r.id) return;
+      const tryOpen = (n) => {
+        if (landmarksById.has(Number(r.id)) || n <= 0) openLandmarkById(r.id);
+        else setTimeout(() => tryOpen(n - 1), 1000);
+      };
+      tryOpen(15);
+    }).catch(() => {});
+  }
+
+  /** You can check a landmark off in its hex, or for a while after being told about it. */
+  function canCheck(l) {
+    return hereCell() === l.cell || Date.now() - (landmarkAlerts[l.id] || 0) < LANDMARK_CHECK_WINDOW_MS;
+  }
+
+  async function openLandmark(l) {
+    S.openSheet('landmarkSheet');
+    if (!l.mine && !l.found_by_me && canCheck(l)) {
+      fill($('landmarkBody'), h('span', { class: 'fine' }, 'Checking it off…'));
+      try {
+        const [r] = check(await sb.rpc('find_landmark', { landmark: l.id }));
+        l.found_by_me = true;
+        l.finds = Number(r.finds) || l.finds + 1;
+        drawLandmarks();
+        if (r.first_time) toast(`${kindOf(l).icon} Landmark found · you're the ${core.ordinal(l.finds)} explorer to find it`, 4000);
+      } catch (err) {
+        if (/gone/.test(err.message)) {
+          S.closeSheet();
+          toast("That landmark isn't around any more");
+          reloadLandmarks();
+          return;
+        }
+        fail(err);
+      }
+    }
+    renderLandmark(l);
+  }
+
+  function renderLandmark(l) {
+    const kind = kindOf(l);
+    const secret = !l.mine && !l.found_by_me;
+    const finds = l.finds === 1 ? 'Found by 1 explorer' : `Found by ${l.finds.toLocaleString()} explorers`;
+    if (secret) {
+      fill($('landmarkBody'), h('div', { class: 'stack' },
+        sheetHead('A landmark'),
+        h('div', { class: 'blocked' },
+          h('div', { class: 'hex-badge quiet', 'aria-hidden': 'true' }, '?'),
+          h('span', { class: 'card-title' }, 'Something is here'),
+          h('span', { class: 'body' }, `Another explorer left a landmark on this hex. Walk through it to find out what it is. ${l.finds ? finds + ' so far.' : 'Nobody has found it yet.'}`)),
+        h('button', { class: 'btn', 'data-close': true }, 'OK')));
+      return;
+    }
+    fill($('landmarkBody'), h('div', { class: 'stack' },
+      sheetHead(l.mine ? 'Your landmark' : 'Landmark found'),
+      h('div', { class: 'landmark-card' },
+        h('span', { class: 'emoji', 'aria-hidden': 'true' }, kind.icon),
+        h('span', { class: 'card-title', dir: 'auto' }, l.title),
+        h('span', { class: 'me-sub' }, [kind.label, l.mine ? 'left by you' : `left by ${l.author || 'an explorer'}`,
+          core.timeAgo(Date.parse(l.created_at))].join(' · ')),
+        l.note ? h('p', { class: 'note', dir: 'auto' }, l.note) : null,
+        h('span', { class: 'fine' }, l.finds ? finds : 'Nobody has found it yet')),
+      l.mine
+        ? h('button', { class: 'btn outline danger', onclick: () => removeLandmark(l) }, 'Remove landmark')
+        : h('button', { class: 'btn', 'data-close': true }, 'Done')));
+  }
+
+  async function removeLandmark(l) {
+    const ok = await confirmDialog({
+      title: 'Remove this landmark?',
+      body: `"${l.title}" disappears from the map${l.finds ? `, and so do its ${l.finds} find${l.finds === 1 ? '' : 's'}` : ''}. This can't be undone.`,
+      confirm: 'Remove',
+    });
+    if (ok !== 'confirm') return;
+    try {
+      check(await sb.from('landmarks').delete().eq('id', l.id));
+      toast('Landmark removed');
+      reloadLandmarks();
+      S.closeSheet();
+    } catch (err) {
+      fail(err);
+    }
+  }
+
+  // ---------- leave a landmark ----------
+
+  let landmarkKind = null;
+
+  $('btnLandmark').addEventListener('click', () => {
+    landmarkKind = null;
+    renderLeaveLandmark();
+    S.openSheet('landmarkSheet');
+  });
+
+  async function renderLeaveLandmark() {
+    const body = 'landmarkBody';
+    const cell = hereCell();
+    if (!cell) {
+      return blocked('⌖', 'Finding you…', 'Landmarks go on the hex you are standing in, so we need your location. Outdoors it usually takes a few seconds.',
+        'Locate me', () => { S.closeSheet(); S.locate(); }, body);
+    }
+    if (!S.visited.has(cell)) {
+      return blocked('?', 'Walk this hex first', "Landmarks go on hexes you've walked. This one is still unexplored — walk through it and try again.",
+        'Start walk', () => S.startWalk(), body);
+    }
+    if (isHidden(cell)) {
+      return blocked('◌', "You're in a privacy zone", 'Nothing inside your privacy zones is shared, so landmarks are off here.', 'Manage zones', () => {
+        renderZoneList();
+        S.openSheet('zonesSheet');
+      }, body);
+    }
+    fill($(body), h('span', { class: 'fine' }, 'Loading…'));
+    let mine = [];
+    try {
+      mine = check(await sb.rpc('my_landmarks')).map((r) => ({ ...r, id: Number(r.id), finds: Number(r.finds) || 0, mine: true }));
+    } catch (err) {
+      // Offline: the server still checks everything on submit.
+    }
+    const existing = mine.find((l) => l.cell === cell);
+    const full = mine.length >= LANDMARK_LIMIT;
+
+    const title = h('input', { class: 'input note', placeholder: 'Name it, e.g. "Rooftop view of the Nile"', maxlength: '60', dir: 'auto', 'aria-label': 'Title' });
+    const note = h('textarea', { class: 'input', placeholder: 'What should people look for? (optional)', maxlength: '280', dir: 'auto', 'aria-label': 'Note' });
+    const submit = h('button', { class: 'btn', type: 'submit', disabled: true }, 'Leave landmark');
+    const kindGrid = h('div', { class: 'kinds', role: 'radiogroup', 'aria-label': 'Kind of landmark' });
+    const valid = () => !!landmarkKind && !!title.value.trim();
+    const draw = () => {
+      fill(kindGrid, Object.entries(core.LANDMARK_KINDS).map(([key, k]) => h('button', {
+        type: 'button', class: 'kind', role: 'radio', 'aria-checked': String(key === landmarkKind),
+        onclick: () => { landmarkKind = key; draw(); },
+      }, h('span', { class: 'emoji', 'aria-hidden': 'true' }, k.icon), h('b', {}, k.label))));
+      submit.disabled = !valid();
+    };
+    title.addEventListener('input', draw);
+
+    const form = existing
+      ? h('div', { class: 'list-card' },
+        h('button', { class: 'list-row', onclick: () => renderLandmark(existing) },
+          h('span', { dir: 'auto' }, `${kindOf(existing).icon} ${existing.title}`),
+          h('span', { class: 'row-val' }, 'Your landmark here'), h('span', { class: 'chev' }, '›')))
+      : full
+        ? h('span', { class: 'body' }, `You have ${LANDMARK_LIMIT} landmarks out. Remove one below to leave another.`)
+        : h('form', {
+          class: 'stack tight',
+          onsubmit: async (e) => {
+            e.preventDefault();
+            if (!valid()) return;
+            submit.disabled = true;
+            try {
+              await sync(); // the server only accepts landmarks in hexes it knows you walked
+              check(await sb.from('landmarks')
+                .insert({ cell, kind: landmarkKind, title: title.value.trim(), note: note.value.trim() || null }));
+              toast(`${core.LANDMARK_KINDS[landmarkKind].icon} Landmark left · explorers passing by will be told`, 4000);
+              landmarkKind = null;
+              reloadLandmarks();
+              renderLeaveLandmark();
+            } catch (err) {
+              fail(err.code === '23505' ? new Error('You already have a landmark on this hex') : err);
+              submit.disabled = !valid();
+            }
+          },
+        }, kindGrid, title, note, submit);
+
+    const area = Areas ? Areas.of(cell) : null;
+    const district = area && area.district ? (Areas.info(area.district) || {}).name : null;
+    fill($(body), h('div', { class: 'stack' },
+      h('div', { class: 'stack tight', style: 'gap:2px' },
+        h('div', { class: 'sheet-head' },
+          h('span', { class: 'sheet-title' }, 'Leave a landmark'),
+          h('button', { class: 'icon-btn sm', 'data-close': true, 'aria-label': 'Close' }, '✕')),
+        h('span', { class: 'me-sub' }, [district, 'on this hex · explorers who pass through get told'].filter(Boolean).join(' · '))),
+      form,
+      await notificationRow(),
+      mine.length ? h('div', { class: 'stack tight' },
+        h('span', { class: 'label' }, `Your landmarks · ${mine.length}/${LANDMARK_LIMIT}`),
+        h('div', { class: 'list-card' }, mine.map((l) => h('button', { class: 'list-row', onclick: () => renderLandmark(l) },
+          h('span', { dir: 'auto' }, `${kindOf(l).icon} ${l.title}`),
+          h('span', { class: l.finds ? 'row-val accent' : 'row-val' }, l.finds ? `found ${l.finds}×` : 'not found yet'),
+          h('span', { class: 'chev' }, '›'))))) : null));
+    draw();
+  }
+
+  /** Android: landmark notifications need the notification permission. */
+  async function notificationRow() {
+    if (!Notifier) return null;
+    try {
+      const s = await Notifier.getStatus();
+      if (s.notificationsAllowed) return null;
+    } catch (err) {
+      return null;
+    }
+    return h('div', { class: 'list-card' },
+      h('button', {
+        class: 'list-row',
+        onclick: async () => {
+          try {
+            const s = await Notifier.allowNotifications();
+            if (s.notificationsAllowed) {
+              toast("You'll get a notification when you pass a landmark");
+              renderLeaveLandmark();
+            } else {
+              toast('Allow notifications for Scoop in Android settings', 4000);
+            }
+          } catch (err) {
+            fail(err);
+          }
+        },
+      }, h('span', {}, 'Notify me about landmarks with the screen off'), h('span', { class: 'row-val accent' }, 'Allow'), h('span', { class: 'chev' }, '›')));
   }
 
   // ---------- boot ----------

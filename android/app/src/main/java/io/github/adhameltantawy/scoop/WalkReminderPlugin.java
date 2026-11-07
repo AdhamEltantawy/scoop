@@ -19,6 +19,7 @@ import java.util.List;
 /**
  * JS bridge for walk reminders: turn them on/off, tell the detector when a walk
  * is recording, and hand "Start walk" taps from the notification to the app.
+ * Also posts landmark notifications and hands their taps to the app.
  */
 @CapacitorPlugin(
         name = "WalkReminder",
@@ -28,6 +29,7 @@ import java.util.List;
         })
 public class WalkReminderPlugin extends Plugin {
     private boolean pendingStart = false;
+    private long pendingLandmark = 0;
 
     @Override
     public void load() {
@@ -36,12 +38,28 @@ public class WalkReminderPlugin extends Plugin {
             pendingStart = true;
             i.removeExtra(WalkDetector.EXTRA_START_WALK);
         }
+        if (i != null && i.hasExtra(LandmarkNotifier.EXTRA_LANDMARK)) {
+            pendingLandmark = i.getLongExtra(LandmarkNotifier.EXTRA_LANDMARK, 0);
+            i.removeExtra(LandmarkNotifier.EXTRA_LANDMARK);
+        }
         WalkDetector.register(getContext());
     }
 
     @Override
     protected void handleOnNewIntent(Intent intent) {
         super.handleOnNewIntent(intent);
+        if (intent != null && intent.hasExtra(LandmarkNotifier.EXTRA_LANDMARK)) {
+            long id = intent.getLongExtra(LandmarkNotifier.EXTRA_LANDMARK, 0);
+            intent.removeExtra(LandmarkNotifier.EXTRA_LANDMARK);
+            if (id != 0 && hasListeners("openLandmark")) {
+                JSObject r = new JSObject();
+                r.put("id", id);
+                notifyListeners("openLandmark", r);
+            } else {
+                pendingLandmark = id;
+            }
+            return;
+        }
         if (intent == null || !intent.getBooleanExtra(WalkDetector.EXTRA_START_WALK, false)) return;
         intent.removeExtra(WalkDetector.EXTRA_START_WALK);
         WalkDetector.cancelNotification(getContext());
@@ -57,6 +75,42 @@ public class WalkReminderPlugin extends Plugin {
         if (pendingStart) WalkDetector.cancelNotification(getContext());
         pendingStart = false;
         call.resolve(r);
+    }
+
+    /** The landmark whose notification opened the app, once (id 0 = none). */
+    @PluginMethod
+    public void takeLandmarkRequest(PluginCall call) {
+        JSObject r = new JSObject();
+        r.put("id", pendingLandmark);
+        pendingLandmark = 0;
+        call.resolve(r);
+    }
+
+    /** "You're passing a landmark" while the app is in the background. */
+    @PluginMethod
+    public void notifyLandmark(PluginCall call) {
+        // getLong() is null for ids that fit in an int, so read it from the raw data.
+        long id = call.getData().optLong("id", 0);
+        String title = call.getString("title", "A landmark here");
+        String text = call.getString("text", "Tap to check it.");
+        JSObject r = new JSObject();
+        r.put("shown", id != 0 && LandmarkNotifier.show(getContext(), id, title, text));
+        call.resolve(r);
+    }
+
+    /** Ask for the notification permission only (for landmark notifications). */
+    @PluginMethod
+    public void allowNotifications(PluginCall call) {
+        if (Build.VERSION.SDK_INT >= 33 && getPermissionState("notifications") != PermissionState.GRANTED) {
+            requestPermissionForAlias("notifications", call, "notificationsDone");
+            return;
+        }
+        call.resolve(status());
+    }
+
+    @PermissionCallback
+    private void notificationsDone(PluginCall call) {
+        call.resolve(status());
     }
 
     @PluginMethod

@@ -81,6 +81,9 @@
     <button class="round checkin-only" id="btnCheckin" aria-label="Check in here" title="Check in here">
       <svg viewBox="0 0 24 24"><path d="M12 21s-7-6.2-7-11.5a7 7 0 0114 0C19 14.8 12 21 12 21z"/><path d="M12 7v5M9.5 9.5h5"/></svg>
     </button>
+    <button class="round checkin-only" id="btnLandmark" aria-label="Leave a landmark" title="Leave a landmark">
+      <svg viewBox="0 0 24 24"><path d="M6 21V4"/><path d="M6 4h11l-2.5 4L17 12H6"/></svg>
+    </button>
     <button class="round" id="btnLocate" aria-label="Centre on my location" title="Centre on my location">
       <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="6"/><path d="M12 2v4M12 18v4M2 12h4M18 12h4"/></svg>
     </button>
@@ -90,6 +93,13 @@
     <div class="nudge-text"><b>Looks like you're walking</b><small>Start a walk and the last minute counts too.</small></div>
     <button class="btn sm" id="btnNudgeStart">Start</button>
     <button class="icon-btn sm" id="btnNudgeClose" aria-label="Not now">✕</button>
+  </div>
+
+  <div class="nudge landmark-alert" id="landmarkAlert" role="status" aria-live="polite" hidden>
+    <span class="landmark-alert-icon" id="landmarkAlertIcon" aria-hidden="true">⚑</span>
+    <div class="nudge-text"><b id="landmarkAlertTitle" dir="auto">A landmark here</b><small id="landmarkAlertSub">Left by another explorer</small></div>
+    <button class="btn sm" id="btnLandmarkCheck">Check it</button>
+    <button class="icon-btn sm" id="btnLandmarkLater" aria-label="Later">✕</button>
   </div>
 
   <nav class="bottom-row" aria-label="Main">
@@ -211,6 +221,12 @@
   <section class="sheet" id="checkinSheet" aria-label="Check in" hidden>
     <div class="grab"></div>
     <div id="checkinBody"></div>
+  </section>
+
+  <!-- Landmarks: leave one, or check one you passed -->
+  <section class="sheet" id="landmarkSheet" aria-label="Landmark" hidden>
+    <div class="grab"></div>
+    <div id="landmarkBody"></div>
   </section>
 
   <!-- Walk saved -->
