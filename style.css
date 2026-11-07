@@ -659,6 +659,7 @@ div.list-row { cursor: default; }
 
 .landmark-card { display: flex; flex-direction: column; gap: 6px; }
 .landmark-card .emoji { font-size: 34px; line-height: 1; }
+.kind.vote { flex-direction: row; align-items: center; justify-content: center; gap: 10px; padding: 12px; }
 .landmark-card .note { font-size: 15px; white-space: pre-wrap; overflow-wrap: anywhere; }
 textarea.input { height: auto; min-height: 76px; padding: 12px 14px; resize: vertical; font-family: inherit; font-size: 15px; }
 

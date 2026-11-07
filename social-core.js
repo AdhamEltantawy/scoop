@@ -25,6 +25,9 @@
     gem: { icon: '💎', label: 'Hidden gem' },
   };
 
+  // Keep in sync with landmark_reward() in the Supabase migration.
+  const LANDMARK_POINTS = { left: 3, found: 2, wasFound: 1, upvoted: 1 };
+
   // Keep in sync with award_badges() in the Supabase migration.
   const BADGES = {
     first_walk: { icon: '👟', glyph: '1', label: 'First steps', desc: 'Record your first walk' },
@@ -476,7 +479,7 @@
   }
 
   return {
-    CHECKIN_KINDS, LANDMARK_KINDS, LANDMARK_QUIET_MS, BADGES, KUDOS, DAY_MS, HALF_LIFE_DAYS, CORE_SCALE,
+    CHECKIN_KINDS, LANDMARK_KINDS, LANDMARK_POINTS, LANDMARK_QUIET_MS, BADGES, KUDOS, DAY_MS, HALF_LIFE_DAYS, CORE_SCALE,
     checkinPoints, regularBonus, heat, hexValue, hexScore, visitGain, inRing, inCore,
     pickAreas, simplifyLine, inWays, waysBox, parseDistricts, districtAt, periodStart, trendBuckets,
     streaks, localBadges, compare, zoneFilter, cellSig, syncDelta, readyToUpload, mergeRemote, topPercent, chunk, validUsername, timeAgo, parseInvite,

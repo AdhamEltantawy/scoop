@@ -1344,7 +1344,8 @@
         })),
         rows.length < 2 ? h('span', { class: 'body' }, 'Add friends in the Friends tab to compete with them, or tap Everyone to see all explorers.') : null,
         h('span', { class: 'fine' }, 'Points fade as hexes cool, so the board always reflects recent walking. ' +
-          'Check-ins add points too: photo 3, coffee or food 2, meeting a friend 5.'));
+          'Check-ins add points too: photo 3, coffee or food 2, meeting a friend 5. ' +
+          'Landmarks: leave one 3, find one 2, +1 each time yours is found or gets a 👍.'));
       return;
     }
 
@@ -1767,6 +1768,8 @@
       for (const r of rows) {
         r.id = Number(r.id);
         r.finds = Number(r.finds) || 0;
+        r.ups = Number(r.ups) || 0;
+        r.downs = Number(r.downs) || 0;
         if (!landmarksByCell.has(r.cell)) landmarksByCell.set(r.cell, []);
         landmarksByCell.get(r.cell).push(r);
         landmarksById.set(r.id, r);
@@ -1863,7 +1866,7 @@
     const by = l.author ? `left by ${l.author}` : 'left by another explorer';
     $('landmarkAlertIcon').textContent = kind.icon;
     $('landmarkAlertTitle').textContent = l.title;
-    $('landmarkAlertSub').textContent = `Landmark here · ${by}`;
+    $('landmarkAlertSub').textContent = `Landmark here · ${by} · +${core.LANDMARK_POINTS.found} pts`;
     $('landmarkAlert').hidden = false;
     document.body.classList.add('landmark-alert-on');
     clearTimeout(landmarkAlertTimer);
@@ -1877,7 +1880,7 @@
     }
     // Screen off (the Android app keeps walking in the background): a notification.
     if (Notifier && document.hidden) {
-      Notifier.notifyLandmark({ id: l.id, title: `${kind.icon} ${l.title}`, text: `A landmark here, ${by}. Tap to check it.` })
+      Notifier.notifyLandmark({ id: l.id, title: `${kind.icon} ${l.title}`, text: `A landmark here, ${by}. Tap to check it for +${core.LANDMARK_POINTS.found} pts.` })
         .catch(() => {});
     }
   }
@@ -1934,7 +1937,7 @@
         l.found_by_me = true;
         l.finds = Number(r.finds) || l.finds + 1;
         drawLandmarks();
-        if (r.first_time) toast(`${kindOf(l).icon} Landmark found · you're the ${core.ordinal(l.finds)} explorer to find it`, 4000);
+        if (r.first_time) toast(`${kindOf(l).icon} Landmark found · +${core.LANDMARK_POINTS.found} pts · you're the ${core.ordinal(l.finds)} explorer to find it`, 4000);
       } catch (err) {
         if (/gone/.test(err.message)) {
           S.closeSheet();
@@ -1962,6 +1965,7 @@
         h('button', { class: 'btn', 'data-close': true }, 'OK')));
       return;
     }
+    const votes = (l.ups || l.downs) ? `👍 ${l.ups || 0} · 👎 ${l.downs || 0}` : null;
     fill($('landmarkBody'), h('div', { class: 'stack' },
       sheetHead(l.mine ? 'Your landmark' : 'Landmark found'),
       h('div', { class: 'landmark-card' },
@@ -1970,16 +1974,52 @@
         h('span', { class: 'me-sub' }, [kind.label, l.mine ? 'left by you' : `left by ${l.author || 'an explorer'}`,
           core.timeAgo(Date.parse(l.created_at))].join(' · ')),
         l.note ? h('p', { class: 'note', dir: 'auto' }, l.note) : null,
-        h('span', { class: 'fine' }, l.finds ? finds : 'Nobody has found it yet')),
+        h('span', { class: 'fine' }, [l.finds ? finds : 'Nobody has found it yet', votes,
+          l.mine && l.points != null ? `earned you ${fmtPts(l.points)} pts` : null].filter(Boolean).join(' · '))),
+      l.mine && l.buried
+        ? h('div', { class: 'panel tint sm' }, h('span', { class: 'body' },
+          'Hidden: explorers who found it voted it down, so nobody else sees it or gets told about it.'))
+        : null,
+      l.mine ? null : voteBox(l),
       l.mine
         ? h('button', { class: 'btn outline danger', onclick: () => removeLandmark(l) }, 'Remove landmark')
         : h('button', { class: 'btn', 'data-close': true }, 'Done')));
   }
 
+  /** Thumbs up or down, for explorers who found it. */
+  function voteBox(l) {
+    const vote = async (v) => {
+      if (busy) return;
+      busy = true;
+      try {
+        const [r] = check(await sb.rpc('vote_landmark', { landmark: l.id, vote: v }));
+        const first = !l.my_vote;
+        l.my_vote = v;
+        l.ups = Number(r.ups) || 0;
+        l.downs = Number(r.downs) || 0;
+        if (first) toast(v === 1 ? `👍 Thanks · +${core.LANDMARK_POINTS.upvoted} pt for whoever left it` : '👎 Thanks · that helps keep landmarks worth the stop');
+        renderLandmark(l);
+      } catch (err) {
+        fail(err);
+      } finally {
+        busy = false;
+      }
+    };
+    let busy = false;
+    const btn = (v, icon, label) => h('button', {
+      type: 'button', class: 'kind vote', role: 'radio', 'aria-checked': String(l.my_vote === v), 'aria-label': label,
+      onclick: () => vote(v),
+    }, h('span', { class: 'emoji', 'aria-hidden': 'true' }, icon), h('b', {}, label));
+    return h('div', { class: 'stack tight' },
+      h('span', { class: 'sublabel' }, l.my_vote ? 'Your vote · tap to change it' : 'Worth the stop? Your vote helps other explorers'),
+      h('div', { class: 'kinds', role: 'radiogroup', 'aria-label': 'Vote' },
+        btn(1, '👍', 'Yes'), btn(-1, '👎', 'Not really')));
+  }
+
   async function removeLandmark(l) {
     const ok = await confirmDialog({
       title: 'Remove this landmark?',
-      body: `"${l.title}" disappears from the map${l.finds ? `, and so do its ${l.finds} find${l.finds === 1 ? '' : 's'}` : ''}. This can't be undone.`,
+      body: `"${l.title}" disappears from the map${l.finds ? `, and so do its ${l.finds} find${l.finds === 1 ? '' : 's'}` : ''}, along with the points it earned you. This can't be undone.`,
       confirm: 'Remove',
     });
     if (ok !== 'confirm') return;
@@ -2023,7 +2063,10 @@
     fill($(body), h('span', { class: 'fine' }, 'Loading…'));
     let mine = [];
     try {
-      mine = check(await sb.rpc('my_landmarks')).map((r) => ({ ...r, id: Number(r.id), finds: Number(r.finds) || 0, mine: true }));
+      mine = check(await sb.rpc('my_landmarks')).map((r) => ({
+        ...r, id: Number(r.id), finds: Number(r.finds) || 0, ups: Number(r.ups) || 0, downs: Number(r.downs) || 0,
+        points: Number(r.points) || 0, mine: true,
+      }));
     } catch (err) {
       // Offline: the server still checks everything on submit.
     }
@@ -2061,7 +2104,7 @@
               await sync(); // the server only accepts landmarks in hexes it knows you walked
               check(await sb.from('landmarks')
                 .insert({ cell, kind: landmarkKind, title: title.value.trim(), note: note.value.trim() || null }));
-              toast(`${core.LANDMARK_KINDS[landmarkKind].icon} Landmark left · explorers passing by will be told`, 4000);
+              toast(`${core.LANDMARK_KINDS[landmarkKind].icon} Landmark left · +${core.LANDMARK_POINTS.left} pts · explorers passing by will be told`, 4000);
               landmarkKind = null;
               reloadLandmarks();
               renderLeaveLandmark();
@@ -2079,14 +2122,16 @@
         h('div', { class: 'sheet-head' },
           h('span', { class: 'sheet-title' }, 'Leave a landmark'),
           h('button', { class: 'icon-btn sm', 'data-close': true, 'aria-label': 'Close' }, '✕')),
-        h('span', { class: 'me-sub' }, [district, 'on this hex · explorers who pass through get told'].filter(Boolean).join(' · '))),
+        h('span', { class: 'me-sub' }, [district, 'on this hex · explorers who pass through get told'].filter(Boolean).join(' · ')),
+        h('span', { class: 'fine' }, `+${core.LANDMARK_POINTS.left} pts now, +${core.LANDMARK_POINTS.wasFound} each time someone finds it, +${core.LANDMARK_POINTS.upvoted} for each 👍.`)),
       form,
       await notificationRow(),
       mine.length ? h('div', { class: 'stack tight' },
         h('span', { class: 'label' }, `Your landmarks · ${mine.length}/${LANDMARK_LIMIT}`),
         h('div', { class: 'list-card' }, mine.map((l) => h('button', { class: 'list-row', onclick: () => renderLandmark(l) },
           h('span', { dir: 'auto' }, `${kindOf(l).icon} ${l.title}`),
-          h('span', { class: l.finds ? 'row-val accent' : 'row-val' }, l.finds ? `found ${l.finds}×` : 'not found yet'),
+          h('span', { class: l.finds && !l.buried ? 'row-val accent' : 'row-val' },
+            l.buried ? 'hidden' : l.finds ? `found ${l.finds}×${l.ups ? ` · 👍 ${l.ups}` : ''}` : 'not found yet'),
           h('span', { class: 'chev' }, '›'))))) : null));
     draw();
   }

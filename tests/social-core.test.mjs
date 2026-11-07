@@ -320,3 +320,8 @@ test('ordinal', () => {
   assert.deepEqual([1, 2, 3, 4, 11, 12, 13, 21, 22, 101, 111].map(core.ordinal),
     ['1st', '2nd', '3rd', '4th', '11th', '12th', '13th', '21st', '22nd', '101st', '111th']);
 });
+
+test('landmark points match the server', () => {
+  // landmark_reward() in supabase/migrations/20261108000000_landmark_points_votes.sql
+  assert.deepEqual(core.LANDMARK_POINTS, { left: 3, found: 2, wasFound: 1, upvoted: 1 });
+});
