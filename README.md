@@ -108,9 +108,13 @@ Sign in with an emailed code to make Scoop social:
   optional note, using the flag button on the right edge. When another explorer
   passes through that hex, walking or just with the map open, Scoop tells them
   with a banner (and, in the Android app with the screen off during a walk, a
-  notification). *Check it* opens the landmark and checks it off. On the map,
-  landmarks you haven't found yet show as **?**. You see how many explorers
-  found each of yours. Everyone signed in can find landmarks, but only you and
+  notification). *Check it* opens the landmark and checks it off, then asks
+  *Worth the stop?* 👍 or 👎. On the map, landmarks you haven't found yet show
+  as **?**. You see how many explorers found each of yours, and their votes.
+  Points (they fade like check-ins): leave one +3, find one +2, and +1 to the
+  author each time theirs is found or gets a 👍. Removing a landmark takes back
+  what it earned its author. One with 3 or more 👎 and at least twice as many
+  👎 as 👍 is hidden from everyone but its author. Everyone signed in can find landmarks, but only you and
   your friends see who left one. Up to 25 out at once, one per hex; none
   inside privacy zones. You're told about a landmark once every 12 hours at
   most, and only once you're well inside its hex.

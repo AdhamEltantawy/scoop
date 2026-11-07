@@ -466,6 +466,68 @@ select test.ok((select finds = 2 and last_found is not null from public.my_landm
 select test.ok(exists (select 1 from public.landmarks where id = (select id from the_landmark)),
   'a stranger could not delete it');
 
+-- Points: leave +3, find +2, found +1 for the author. alice's 24 removed landmarks earned nothing.
+reset role;
+select test.ok((select sum(points) from public.landmark_points where user_id = '00000000-0000-0000-0000-00000000000a') = 5
+    and (select sum(points) from public.landmark_points where user_id = '00000000-0000-0000-0000-00000000000c') = 2
+    and (select sum(points) from public.landmark_points where user_id = '00000000-0000-0000-0000-00000000000b') = 2,
+  'leaving and finding landmarks earn points');
+select test.ok(abs(public.score_now('00000000-0000-0000-0000-00000000000c', null)
+    - (select sum(public.hex_value(visits) * public.heat(last_visited, now())) from public.user_cells
+       where user_id = '00000000-0000-0000-0000-00000000000c') - 2) < 0.01,
+  'landmark points count in the score');
+select test.ok(public.score_gained('00000000-0000-0000-0000-00000000000c', now() - interval '1 hour', null, 'r10') >= 2
+    and not exists (select 1 from public.landmark_points p
+      where p.user_id = '00000000-0000-0000-0000-00000000000c' and public.landmark_points_in(p, 'r20')),
+  'in the landmark''s district');
+select test.ok(exists (select 1 from public.everyone_ranking(now() - interval '1 hour', null)
+    where user_id = '00000000-0000-0000-0000-00000000000c' and value >= 2), 'and on this week''s boards');
+
+-- Votes: only finders, up or down, changeable. A thumbs up is a point for the author.
+set role authenticated;
+select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-00000000000d', false);
+select test.throws($$ select public.vote_landmark((select id from the_landmark), 1) $$, 'find it before voting');
+select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-00000000000c', false);
+select test.throws($$ select public.vote_landmark((select id from the_landmark), 0) $$, 'up or down only');
+select test.ok((select ups = 1 and downs = 0 from public.vote_landmark((select id from the_landmark), 1)), 'thumbs up');
+select test.ok((select my_vote = 1 and ups = 1 from public.landmarks_near(array[public.h3_to_parent('8a3e6281ba1ffff', 7)])),
+  'your vote shows near you');
+reset role;
+select test.ok((select sum(points) from public.landmark_points where user_id = '00000000-0000-0000-0000-00000000000a') = 6,
+  'a thumbs up gives the author a point');
+set role authenticated;
+select test.ok((select ups = 0 and downs = 1 from public.vote_landmark((select id from the_landmark), -1)), 'changing your vote');
+reset role;
+select test.ok((select sum(points) from public.landmark_points where user_id = '00000000-0000-0000-0000-00000000000a') = 5,
+  'and the point goes again');
+-- Voted down enough: hidden from everyone but the author.
+set role authenticated;
+select test.throws($$ insert into public.landmark_points (user_id, cell, reason, points)
+  values (auth.uid(), '8a3e6281ba1ffff', 'left', 100) $$, 'no direct points');
+select test.throws($$ select * from public.landmark_points $$, 'points are not readable directly');
+select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-00000000000d', false);
+select public.find_landmark((select id from the_landmark));
+select public.vote_landmark((select id from the_landmark), -1);
+select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-00000000000b', false);
+select test.ok((select downs = 3 from public.vote_landmark((select id from the_landmark), -1)), 'three downs');
+select test.ok((select count(*) from public.landmarks_near(array[public.h3_to_parent('8a3e6281ba1ffff', 7)])) = 0,
+  'a landmark voted down is hidden');
+select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-00000000000a', false);
+select test.ok((select buried and downs = 3 from public.my_landmarks()), 'the author still sees it, marked hidden');
+select test.ok((select count(*) from public.landmarks_near(array[public.h3_to_parent('8a3e6281ba1ffff', 7)])) = 1,
+  'and near them');
+-- Removing a landmark takes back its author's points; finders keep theirs.
+insert into public.landmarks (cell, kind, title) values ('8a3e6281ba17fff', 'art', 'Mural');
+select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-00000000000c', false);
+select public.find_landmark((select id from public.landmarks_near(array[public.h3_to_parent('8a3e6281ba17fff', 7)]) where title = 'Mural'));
+select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-00000000000a', false);
+delete from public.landmarks where title = 'Mural';
+reset role;
+select test.ok((select sum(points) from public.landmark_points where user_id = '00000000-0000-0000-0000-00000000000a') = 6
+    and (select sum(points) from public.landmark_points where user_id = '00000000-0000-0000-0000-00000000000c') = 4,
+  'removing a landmark takes back the author''s points only');
+set role authenticated;
+
 -- ---------- anon and account deletion ----------
 reset role;
 set role anon;
@@ -485,6 +547,9 @@ select test.ok(not exists (select 1 from public.profiles where username = 'bob')
 select test.ok(not exists (select 1 from public.user_cells where user_id = '00000000-0000-0000-0000-00000000000b'), 'and the cells');
 select test.ok(not exists (select 1 from public.score_events where user_id = '00000000-0000-0000-0000-00000000000b'), 'and the score log');
 select test.ok((select met_with from public.checkins where kind = 'meetup') is null, 'and unlinks meetups');
-select test.ok((select count(*) from public.landmark_finds) = 1, 'and their landmark finds');
+select test.ok((select count(*) from public.landmark_finds) = 2, 'and their landmark finds');
+select test.ok(not exists (select 1 from public.landmark_points where user_id = '00000000-0000-0000-0000-00000000000b')
+    and not exists (select 1 from public.landmark_points where from_user = '00000000-0000-0000-0000-00000000000b'),
+  'and landmark points');
 
 \echo 'All social schema tests passed'
