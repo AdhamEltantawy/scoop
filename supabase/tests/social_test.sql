@@ -84,7 +84,7 @@ select test.ok(public.sync_cells(jsonb_build_array(
   jsonb_build_object('c', '8a3e6281ba17fff', 't', test.ms('60 days'), 'l', test.ms('30 days'), 'v', 1, 'a', '["r1","r2","r10"]'::jsonb),
   jsonb_build_object('c', '8a3e6281baaffff', 't', test.ms(), 'a', '["r1","r2","r10"]'::jsonb)
 ), (select a from areas_json)) = 3, 'sync inserts cells');
-select test.ok((select string_agg(name, ',' order by id) from public.areas where id !~ '^r9') = 'Egypt,Zamalek,Cairo,Maadi', 'area names stored');
+select test.ok((select string_agg(name, ',' order by id) from public.areas where id in ('r1', 'r2', 'r10', 'r20')) = 'Egypt,Zamalek,Cairo,Maadi', 'area names stored');
 -- Scoop's own districts are seeded by migration and can't be renamed by a sync.
 select test.ok((select name from public.areas where id = 'r900000000001') = 'Zamalek', 'own districts are seeded');
 select public.sync_cells('[]'::jsonb,
@@ -350,58 +350,50 @@ select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-00000000000b
 select public.respond_friend_request('00000000-0000-0000-0000-00000000000a', true);
 select test.ok((select count(*) from public.user_cells) = 5, 'friends once more');
 
--- ---------- own districts: country and city filled in by the server ----------
--- New Cairo hexes N1–N3: 8a3e62ba3877fff 8a3e62ba382ffff 8a3e62ba380ffff
+-- ---------- own districts: country and city fixed by the server ----------
+-- Egypt r1473947; Cairo r4103336 (New Cairo is r900000000012); Giza r3824206.
+-- New Cairo hexes N1–N2: 8a3e62ba3877fff 8a3e62ba382ffff
+reset role;
+select test.ok((select count(*) from public.area_parents) = 22
+    and not exists (select 1 from public.area_parents where borrowed)
+    and (select city from public.area_parents where district = 'r900000000012') = 'r4103336'
+    and (select city from public.area_parents where district = 'r900000000017') = 'r3824206',
+  'every own district has fixed parents');
+select test.ok((select name from public.areas where id = 'r3824206') = 'Giza', 'and the parents are named');
+set role authenticated;
 select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-00000000000c', false);
 select public.sync_cells(jsonb_build_array(
   jsonb_build_object('c', '8a3e62ba3877fff', 't', test.ms(), 'a', '["", "", "r900000000012"]'::jsonb)));
 reset role;
-select test.ok((select country is null and district = 'r900000000012' from public.user_cells where cell = '8a3e62ba3877fff'),
-  'own-district hexes upload before their country is known');
+select test.ok((select country = 'r1473947' and city = 'r4103336' and district = 'r900000000012'
+    from public.user_cells where cell = '8a3e62ba3877fff'),
+  'own-district hexes get their country and city from the server');
 set role authenticated;
 select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-00000000000d', false);
 select public.sync_cells(jsonb_build_array(
-  jsonb_build_object('c', '8a3e62ba382ffff', 't', test.ms(), 'a', '["r1", "r2", "r900000000012"]'::jsonb)));
+  jsonb_build_object('c', '8a3e62ba382ffff', 't', test.ms(), 'a', '["r1", "r2", "r900000000012"]'::jsonb)),
+  '[{"id": "r1473947", "kind": "country", "name": "Hacked", "level": 2}]'::jsonb);
 reset role;
-select test.ok((select country = 'r1' and city = 'r2' from public.user_cells where cell = '8a3e62ba3877fff'),
-  'a fully tagged upload teaches the server where the district is, and re-tags earlier hexes');
-select test.ok(not exists (select 1 from public.score_events where district = 'r900000000012' and (country = '' or city = ''))
-    and (select sum(points) from public.score_events where district = 'r900000000012'
-      and user_id = '00000000-0000-0000-0000-00000000000c' and country = 'r1' and city = 'r2') = 1,
-  'and moves their points into the country and city');
-set role authenticated;
-select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-00000000000c', false);
-select public.sync_cells(jsonb_build_array(
-  jsonb_build_object('c', '8a3e62ba380ffff', 't', test.ms(), 'a', '["", "", "r900000000012"]'::jsonb)));
-reset role;
-select test.ok((select country = 'r1' and city = 'r2' from public.user_cells where cell = '8a3e62ba380ffff'),
-  'later own-district hexes get their country and city straight away');
--- Rehab hexes R1–R3: 8a3e62b166f7fff 8a3e62b166affff 8a3e62b1668ffff
-set role authenticated;
-select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-00000000000c', false);
-select public.sync_cells(jsonb_build_array(
-  jsonb_build_object('c', '8a3e62b166f7fff', 't', test.ms(), 'a', '["", "", "r900000000013"]'::jsonb)));
-reset role;
-select test.ok((select country = 'r1' and city = 'r2' from public.user_cells where cell = '8a3e62b166f7fff'),
-  'a district nobody tagged yet borrows from another in the same governorate');
+select test.ok((select country = 'r1473947' and city = 'r4103336' from public.user_cells where cell = '8a3e62ba382ffff')
+    and (select country = 'r1473947' and city = 'r4103336' from public.user_cells where cell = '8a3e62ba3877fff')
+    and (select country = 'r1473947' and city = 'r4103336' from public.area_parents where district = 'r900000000012'),
+  'an upload claiming another country and city changes nothing, for anyone');
+select test.ok((select name from public.areas where id = 'r1473947') = 'Egypt', 'nor renames the country');
+select test.ok(not exists (select 1 from public.score_events where district = 'r900000000012'
+      and (country <> 'r1473947' or city <> 'r4103336'))
+    and (select sum(points) from public.score_events where district = 'r900000000012' and city = 'r4103336') = 2,
+  'points land in the fixed country and city');
+-- Rehab hex R1: 8a3e62b166f7fff
 set role authenticated;
 select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-00000000000d', false);
 select public.sync_cells(jsonb_build_array(
-  jsonb_build_object('c', '8a3e62b166affff', 't', test.ms(), 'a', '["r1", "r77", "r900000000013"]'::jsonb)));
+  jsonb_build_object('c', '8a3e62b166f7fff', 't', test.ms(), 'a', '["r1", "r77", "r900000000013"]'::jsonb)));
 reset role;
-select test.ok((select city = 'r77' from public.user_cells where cell = '8a3e62b166f7fff')
-    and (select sum(points) from public.score_events where user_id = '00000000-0000-0000-0000-00000000000c'
-      and district = 'r900000000013' and city = 'r77') = 1
-    and not exists (select 1 from public.score_events where district = 'r900000000013' and city <> 'r77'),
-  'its own answer replaces the borrowed one, for hexes and points');
+select test.ok((select city = 'r4103336' from public.user_cells where cell = '8a3e62b166f7fff')
+    and (select city = 'r4103336' and not borrowed from public.area_parents where district = 'r900000000013'),
+  'a district nobody walked yet cannot be claimed by the first upload');
 set role authenticated;
-select public.sync_cells(jsonb_build_array(
-  jsonb_build_object('c', '8a3e62b1668ffff', 't', test.ms(), 'a', '["r1", "r55", "r900000000013"]'::jsonb)));
-reset role;
-select test.ok((select city = 'r77' from public.user_cells where cell = '8a3e62b1668ffff')
-    and (select city = 'r2' from public.user_cells where cell = '8a3e62ba3877fff'),
-  'after that each own district keeps one city');
-set role authenticated;
+select test.throws($$ select public.learn_area_parents('[]'::jsonb) $$, 'learning parents from uploads is gone');
 select test.throws($$ select * from public.area_parents $$, 'area parents are not readable');
 select test.throws($$ select public.apply_area_parents(array['r900000000012']) $$, 'nor callable');
 

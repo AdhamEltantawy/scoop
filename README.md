@@ -92,8 +92,8 @@ Sign in with an emailed code to make Scoop social:
   API, cached on the device, never drawn on the map). Where OSM has no
   districts, Scoop's own outlines in `districts.geojson` are used instead
   (Greater Cairo and Giza so far). Hexes in those upload straight away, and the
-  server fills in their country and city (learned from tagged hexes in the
-  same district, or else in the same governorate). Elsewhere a hex waits for its OSM
+  server fills in their country and city (Egypt, and Cairo or Giza
+  governorate, fixed in the database; uploads can't change them). Elsewhere a hex waits for its OSM
   lookup, for up to 3 days. Your home district, city and country are
   where you score the most.
 - **Leaderboards**: your friends, everyone in your district, city or
