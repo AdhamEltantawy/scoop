@@ -155,10 +155,19 @@ npm run test:db   # schema + row level security tests against a local Postgres 1
                   # (set PGURL to a superuser connection, default postgres:///postgres)
 ```
 
+Both run on every pull request (`.github/workflows/test.yml`), and before every
+APK release and web deploy.
+
 ## Android app
 
-Every push builds an installable APK with GitHub Actions
-(`.github/workflows/android.yml`) and publishes it as a GitHub Release.
+Releases are made on purpose: pushing a tag such as `v1.2.0` runs the tests,
+then builds a signed APK with GitHub Actions (`.github/workflows/android.yml`)
+and publishes it as a GitHub Release, with its SHA-256 in the notes. Running
+the workflow by hand builds an APK as a workflow artifact without publishing it.
+
+```sh
+git tag v1.2.0 && git push origin v1.2.0
+```
 
 **To install:** on your phone, open the repo's **Releases** page, download
 `scoop.apk` from the latest release and open it. The first time, Android asks
@@ -217,8 +226,8 @@ python3 -m http.server 8000
 ```
 
 **On your phone (Android or iPhone):** open
-<https://adhameltantawy.github.io/scoop/> and use *Add to Home Screen*. Every push
-redeploys it via `.github/workflows/pages.yml`. One-time setup: *Settings → Pages
+<https://adhameltantawy.github.io/scoop/> and use *Add to Home Screen*. Every push to the
+default branch runs the tests and then redeploys it via `.github/workflows/pages.yml`. One-time setup: *Settings → Pages
 → Source: GitHub Actions*.
 
 On iPhone, keep the app open with the screen on while walking: iOS stops giving
