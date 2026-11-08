@@ -185,12 +185,24 @@ cd android && ./gradlew assembleRelease
 
 or run `npm run android:open` to work in Android Studio.
 
-**Signing:** builds are signed with `android/app/scoop.keystore`, which is
-checked into the repo so every build can upgrade the previous one. That's fine
-for a personal sideloaded app. To use a private key instead, add the
-`SCOOP_KEYSTORE_BASE64` and `SCOOP_KEYSTORE_PASSWORD` repository secrets (the
-key alias must be `scoop`). Switching keys means uninstalling once, so export a
-backup first.
+**Signing:** release builds need a private key; there is no key in the repo
+and no fallback, so `assembleRelease` fails without one. Debug builds
+(`./gradlew assembleDebug`) use the standard Android debug key.
+
+1. Create a key once, on your own machine, and keep the file and password in
+   a password manager:
+   `keytool -genkeypair -v -keystore scoop-release.keystore -alias scoop -keyalg RSA -keysize 4096 -validity 10000`
+   (use the same password for the key and the store).
+2. For GitHub Actions, add the repository secrets `SCOOP_KEYSTORE_BASE64`
+   (`base64 -w0 scoop-release.keystore` on Linux, `base64 -i scoop-release.keystore`
+   on macOS) and `SCOOP_KEYSTORE_PASSWORD`.
+3. For a local release build, set `SCOOP_KEYSTORE` (path to the file) and
+   `SCOOP_KEYSTORE_PASSWORD`; `SCOOP_KEY_ALIAS` defaults to `scoop`.
+
+Earlier APKs were signed with a key that was published in this repository, so
+that key is retired. Moving from an old APK to one signed with the new key
+means uninstalling once: sign in or export a backup first, then install the new
+APK and sign in or restore.
 
 ## Running it in a browser
 

@@ -30,15 +30,18 @@ jobs:
           npm ci
           npm run android:sync
 
-      # Optional: sign with your own key by adding SCOOP_KEYSTORE_BASE64 and
-      # SCOOP_KEYSTORE_PASSWORD repository secrets. Otherwise the key in the
-      # repo is used.
-      - name: Use private signing key if configured
+      # Releases are signed only with the private key in the
+      # SCOOP_KEYSTORE_BASE64 and SCOOP_KEYSTORE_PASSWORD repository secrets.
+      # Without them the build stops here.
+      - name: Load private signing key
         env:
           KEYSTORE_B64: ${{ secrets.SCOOP_KEYSTORE_BASE64 }}
           KEYSTORE_PASSWORD: ${{ secrets.SCOOP_KEYSTORE_PASSWORD }}
-        if: env.KEYSTORE_B64 != ''
         run: |
+          if [ -z "$KEYSTORE_B64" ] || [ -z "$KEYSTORE_PASSWORD" ]; then
+            echo "::error::Add the SCOOP_KEYSTORE_BASE64 and SCOOP_KEYSTORE_PASSWORD repository secrets (see README, Signing)."
+            exit 1
+          fi
           echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/scoop.keystore"
           echo "SCOOP_KEYSTORE=$RUNNER_TEMP/scoop.keystore" >> "$GITHUB_ENV"
           echo "SCOOP_KEYSTORE_PASSWORD=$KEYSTORE_PASSWORD" >> "$GITHUB_ENV"

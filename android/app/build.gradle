@@ -1,5 +1,17 @@
 apply plugin: 'com.android.application'
 
+def releaseKeystore = System.getenv('SCOOP_KEYSTORE')
+
+gradle.taskGraph.whenReady { graph ->
+    def releaseTask = graph.allTasks.find { it.name ==~ /(assemble|bundle|package|install)Release/ }
+    if (releaseTask && !releaseKeystore) {
+        throw new GradleException('Release builds need a private signing key: set SCOOP_KEYSTORE and SCOOP_KEYSTORE_PASSWORD (see README, "Signing").')
+    }
+    if (releaseTask && !System.getenv('SCOOP_KEYSTORE_PASSWORD')) {
+        throw new GradleException('SCOOP_KEYSTORE is set but SCOOP_KEYSTORE_PASSWORD is not.')
+    }
+}
+
 android {
     namespace = "io.github.adhameltantawy.scoop"
     compileSdk = rootProject.ext.compileSdkVersion
@@ -17,23 +29,25 @@ android {
             ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
         }
     }
+    // Release builds are signed only with a private key from the environment
+    // (SCOOP_KEYSTORE, SCOOP_KEYSTORE_PASSWORD, optional SCOOP_KEY_ALIAS and
+    // SCOOP_KEY_PASSWORD). There is no fallback: a release build without them
+    // fails. Debug builds use the standard Android debug key.
     signingConfigs {
-        // A fixed key checked into the repo, so each new APK installs over the
-        // previous one (keeping your data). Fine for a personal sideloaded app;
-        // override with SCOOP_KEYSTORE* environment variables for anything more.
-        scoop {
-            storeFile file(System.getenv('SCOOP_KEYSTORE') ?: 'scoop.keystore')
-            storePassword System.getenv('SCOOP_KEYSTORE_PASSWORD') ?: 'scoopapp'
-            keyAlias System.getenv('SCOOP_KEY_ALIAS') ?: 'scoop'
-            keyPassword System.getenv('SCOOP_KEY_PASSWORD') ?: 'scoopapp'
+        if (releaseKeystore) {
+            release {
+                storeFile file(releaseKeystore)
+                storePassword System.getenv('SCOOP_KEYSTORE_PASSWORD')
+                keyAlias System.getenv('SCOOP_KEY_ALIAS') ?: 'scoop'
+                keyPassword System.getenv('SCOOP_KEY_PASSWORD') ?: System.getenv('SCOOP_KEYSTORE_PASSWORD')
+            }
         }
     }
     buildTypes {
-        debug {
-            signingConfig signingConfigs.scoop
-        }
         release {
-            signingConfig signingConfigs.scoop
+            if (releaseKeystore) {
+                signingConfig signingConfigs.release
+            }
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
         }
