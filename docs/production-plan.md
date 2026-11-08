@@ -416,6 +416,15 @@ without notice.
 - **14.5 Dependencies.** Update Capacitor (8.6.0 is out) and keep an eye on
   `npm audit`: today 6 moderate issues, all in build tools, nothing that ships.
 
+## Progress
+
+- **8 November 2026.** Code done for 1.2 (no fallback signing key; the key is
+  out of the repo), 2.1 (fixed parents for own districts, migration
+  `20261109000000_fixed_area_parents.sql`, not yet applied to production), 4
+  (tests in CI, releases from tags, actions pinned) and 6.1 (pulled hexes never
+  uploaded back; zones enforced on pull). Still needed from you: 1.1 and 1.3
+  (new key, secrets, telling users), applying the 2.1 migration, and 3.
+
 ## Launch checklist
 
 - [ ] APKs signed with a private key; the old key out of the repo; users told how to move over
