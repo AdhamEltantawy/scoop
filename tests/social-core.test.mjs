@@ -59,6 +59,23 @@ test('sync delta sends new, revisited and newly tagged cells only', () => {
   assert.equal(core.cellSig(delta[2]), '1|4|r1,,r9');
 });
 
+test('hexes pulled from the server are never uploaded back', () => {
+  const t = Date.UTC(2026, 10, 1);
+  const row = { cell: 'p', first_visited: new Date(t).toISOString(), last_visited: new Date(t + DAY).toISOString(), visits: 2 };
+  assert.equal(core.pulledSig(row), `2|${t + DAY}|*`);
+  const visited = new Map([['p', t], ['q', t]]);
+  const counts = { p: 2, q: 3 };
+  const last = new Map([['p', t + DAY], ['q', t + DAY]]);
+  // q was walked here once more than the server has: that still goes up.
+  const synced = { p: core.pulledSig(row), q: core.pulledSig({ ...row, cell: 'q' }) };
+  const areas = { p: { country: 'r1', city: 'r2', district: 'r3' } };
+  const delta = core.syncDelta(visited, (c) => counts[c], last, (c) => areas[c] || null, synced, () => false);
+  assert.deepEqual(delta.map((x) => x.c), ['q'], 'area tags found later do not re-upload a pulled hex');
+  // Walked again on this device after the pull: it goes up.
+  last.set('p', t + 2 * DAY);
+  assert.deepEqual(core.syncDelta(visited, (c) => counts[c], last, () => null, synced, () => false).map((x) => x.c), ['p', 'q']);
+});
+
 test('top percent counts from the middle of your place', () => {
   assert.equal(core.topPercent(6, 500), 1.1);
   assert.equal(core.topPercent(3, 4), 62.5);

@@ -334,6 +334,24 @@
   }
 
   /**
+   * Signature for a hex pulled from the server (a my_cells() row): the
+   * server already has these visits, whatever area tags this device later
+   * finds for it. Stored like cellSig() so a device never uploads back what it
+   * only downloaded (which would undo another device's privacy zone).
+   */
+  function pulledSig(row) {
+    const t = Date.parse(row.first_visited);
+    const l = Math.max(t, Date.parse(row.last_visited) || t);
+    return `${Math.max(1, row.visits | 0)}|${l}|*`;
+  }
+
+  /** Whether `x` (as syncDelta() builds it) is already on the server, per its stored signature. */
+  function isSynced(sig, x) {
+    if (sig === undefined) return false;
+    return sig === cellSig(x) || sig === `${x.v}|${x.l}|*`;
+  }
+
+  /**
    * Cells that changed since the last sync, in the shape sync_cells() takes:
    * { c, t: first visit, l: last visit, v: visits, a: [country, city, district] | undefined }.
    * synced: { cell: cellSig of what was uploaded }. areaOf(cell) returns the
@@ -346,7 +364,7 @@
       const a = areaOf(c);
       const x = { c, t, l: lastSeen.get(c) || t, v: visitCount(c) };
       if (a) x.a = [a.country || '', a.city || '', a.district || ''];
-      if (synced[c] !== cellSig(x)) out.push(x);
+      if (!isSynced(synced[c], x)) out.push(x);
     }
     return out;
   }
@@ -482,7 +500,7 @@
     CHECKIN_KINDS, LANDMARK_KINDS, LANDMARK_POINTS, LANDMARK_QUIET_MS, BADGES, KUDOS, DAY_MS, HALF_LIFE_DAYS, CORE_SCALE,
     checkinPoints, regularBonus, heat, hexValue, hexScore, visitGain, inRing, inCore,
     pickAreas, simplifyLine, inWays, waysBox, parseDistricts, districtAt, periodStart, trendBuckets,
-    streaks, localBadges, compare, zoneFilter, cellSig, syncDelta, readyToUpload, mergeRemote, topPercent, chunk, validUsername, timeAgo, parseInvite,
+    streaks, localBadges, compare, zoneFilter, cellSig, pulledSig, syncDelta, readyToUpload, mergeRemote, topPercent, chunk, validUsername, timeAgo, parseInvite,
     landmarkToAlert, pruneAlerted, ordinal,
   };
 });

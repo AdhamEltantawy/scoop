@@ -469,6 +469,12 @@
    * nothing on this device is lost.
    */
   async function pullFromServer() {
+    // Pulled hexes are marked as on the server since version 2: pull
+    // everything once more so earlier pulls get marked too.
+    if (syncState.pullVersion !== 2) {
+      delete syncState.pulledAt;
+      syncState.pulledWalk = 0;
+    }
     const first = !syncState.pulledAt;
     const since = first ? null : new Date(Date.parse(syncState.pulledAt) - PULL_OVERLAP_MS).toISOString();
     const walkAfter = first ? 0 : syncState.pulledWalk || 0;
@@ -478,6 +484,17 @@
     ]);
     const valid = (c) => h3.isValidCell(c) && h3.getResolution(c) === S.BASE_RES;
     const got = core.mergeRemote(S, cellRows, walkRows, valid);
+    // What came down is on the server already: never upload it back, so a
+    // hex another device took off the server (its privacy zone) stays off.
+    // Hexes inside this device's zones that another device uploaded come off
+    // the server again.
+    const hidden = [];
+    for (const r of cellRows) {
+      if (!valid(r.cell)) continue;
+      if (isHidden(r.cell)) hidden.push(r.cell);
+      else syncState.cells[r.cell] = core.pulledSig(r);
+    }
+    await removeFromServer(hidden);
     // Walks already on the server don't need uploading again.
     const known = new Set(syncState.walks);
     for (const r of walkRows) {
@@ -490,6 +507,7 @@
     syncState.pulledAt = cursor ? new Date(cursor).toISOString() : undefined;
     for (const r of walkRows) syncState.pulledWalk = Math.max(syncState.pulledWalk || 0, Number(r.id) || 0);
     delete syncState.pulled; // from before pulls were incremental
+    syncState.pullVersion = 2;
     saveSync();
     if (!got.cells && !got.warmed && !got.walks) return;
     S.saveNow();
@@ -499,18 +517,22 @@
     toast(`${first ? 'Restored from your account' : 'From your other devices'} · ${what}`, 4000);
   }
 
+  /** Delete these hexes of yours, and your check-ins and landmarks on them, from the server. */
+  async function removeFromServer(cells) {
+    for (const batch of core.chunk(cells, 200)) {
+      check(await sb.from('user_cells').delete().eq('user_id', uid()).in('cell', batch));
+      check(await sb.from('checkins').delete().eq('user_id', uid()).in('cell', batch));
+      check(await sb.from('landmarks').delete().eq('user_id', uid()).in('cell', batch));
+      for (const c of batch) delete syncState.cells[c];
+      saveSync();
+    }
+  }
+
   /** Remove anything now inside a privacy zone from the server, or upload what left one. */
   async function afterZonesChanged() {
     if (!profile) return;
     try {
-      const hidden = Object.keys(syncState.cells).filter(isHidden);
-      for (const batch of core.chunk(hidden, 200)) {
-        check(await sb.from('user_cells').delete().eq('user_id', uid()).in('cell', batch));
-        check(await sb.from('checkins').delete().eq('user_id', uid()).in('cell', batch));
-        check(await sb.from('landmarks').delete().eq('user_id', uid()).in('cell', batch));
-        for (const c of batch) delete syncState.cells[c];
-        saveSync();
-      }
+      await removeFromServer(Object.keys(syncState.cells).filter(isHidden));
       await sync();
       loadCheckinMarkers();
       reloadLandmarks();
