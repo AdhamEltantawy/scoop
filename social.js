@@ -902,7 +902,7 @@
   async function loadFeedPage(before) {
     const lim = 20;
     const [walks, checkins, badges] = await Promise.all([
-      sb.from('walks').select('id, user_id, started_at, km, new_cells, profiles(username, display_name), kudos(user_id, emoji)')
+      sb.from('walks').select('id, user_id, started_at, km, new_cells, profiles!walks_user_id_fkey(username, display_name), kudos(user_id, emoji)')
         .lt('started_at', before).order('started_at', { ascending: false }).limit(lim),
       sb.from('checkins')
         .select('id, user_id, cell, kind, note, photo_path, met_with, created_at, author:profiles!checkins_user_id_fkey(username, display_name), met:profiles!checkins_met_with_fkey(username, display_name)')
@@ -1739,6 +1739,7 @@
   const LANDMARK_REFRESH_MS = 10 * 60000;
   const LANDMARK_RETRY_MS = 60000;
   const LANDMARK_MAX_ACCURACY = 35;         // metres: a vaguer fix could be the hex next door
+  const LANDMARK_FIX_MAX_AGE_MS = 2 * 60000; // leaving one needs a recent fix: you may have moved on
   const LANDMARK_ALERT_HIDE_MS = 10 * 60000;
   const LANDMARK_CHECK_WINDOW_MS = 30 * 60000; // after being told, you can still check it off from afar
   const LANDMARK_ZOOM = 15;
@@ -2121,12 +2122,11 @@
       return blocked('⌖', 'Finding you…', 'Landmarks go on the hex you are standing in, so we need your location. Outdoors it usually takes a few seconds.',
         'Locate me', () => { S.closeSheet(); S.locate(); }, body);
     }
-    if (!S.visited.has(cell)) {
-      return S.walking()
-        ? blocked('?', 'Not counted yet', "Landmarks go on hexes you've walked, and this one counts once you're well inside it. Keep going and try again in a moment.",
-          'OK', S.closeSheet, body)
-        : blocked('?', 'Walk this hex first', "Landmarks go on hexes you've walked. This one is still unexplored — walk through it and try again.",
-          'Start walk', () => S.startWalk(), body);
+    // Any hex you're standing in, walked or not: but be sure it's this one.
+    const pos = S.position();
+    if (pos.accuracy > LANDMARK_MAX_ACCURACY || Date.now() - pos.time > LANDMARK_FIX_MAX_AGE_MS) {
+      return blocked('⌖', 'Pinpointing you…', `Landmarks go on the hex you're standing in, so we need a precise location (within ${LANDMARK_MAX_ACCURACY} m; now ${Math.round(pos.accuracy)} m). Outdoors, away from tall buildings, it usually takes a few seconds.`,
+        'Try again', () => renderLeaveLandmark(), body);
     }
     if (isHidden(cell)) {
       return blocked('◌', "You're in a privacy zone", 'Nothing inside your privacy zones is shared, so landmarks are off here.', 'Manage zones', () => {
@@ -2186,7 +2186,6 @@
             if (!valid()) return;
             submit.disabled = true;
             try {
-              await sync(); // the server only accepts landmarks in hexes it knows you walked
               check(await sb.from('landmarks')
                 .insert({ cell, kind: landmarkKind, title: title.value.trim(), note: note.value.trim() || null }));
               toast(`${core.LANDMARK_KINDS[landmarkKind].icon} Landmark left · +${core.LANDMARK_POINTS.left} pts · explorers passing by will be told`, 4000);

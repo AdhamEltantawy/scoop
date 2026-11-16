@@ -409,8 +409,11 @@ select test.throws($$ select public.apply_area_parents(array['r900000000012']) $
 -- alice (Z1–Z3) and bob are friends; carol is a stranger to both.
 set role authenticated;
 select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-00000000000a', false);
-select test.throws($$ insert into public.landmarks (cell, kind, title) values ('8a1fb466249ffff', 'view', 'Nope') $$,
-  'cannot leave a landmark on an unwalked hex');
+-- Any hex you're standing in, walked or not (the app checks you're there).
+insert into public.landmarks (cell, kind, title) values ('8a1fb466249ffff', 'view', 'Never walked');
+select test.ok((select count(*) from public.my_landmarks() where title = 'Never walked') = 1,
+  'can leave a landmark on a hex you haven''t walked');
+delete from public.landmarks where title = 'Never walked';
 select test.throws($$ insert into public.landmarks (cell, kind, title) values ('8a3e6281ba1ffff', 'castle', 'Nope') $$,
   'kind is checked');
 select test.throws($$ insert into public.landmarks (cell, kind, title) values ('8a3e6281ba1ffff', 'view', '   ') $$,
@@ -530,6 +533,19 @@ reset role;
 select test.ok((select sum(points) from public.landmark_points where user_id = '00000000-0000-0000-0000-00000000000a') = 6
     and (select sum(points) from public.landmark_points where user_id = '00000000-0000-0000-0000-00000000000c') = 4,
   'removing a landmark takes back the author''s points only');
+-- On a hex its author never walked, the points still count where the hex is
+-- (from other explorers' tags for it).
+delete from public.user_cells where user_id = '00000000-0000-0000-0000-00000000000d' and cell = '8a3e6281ba1ffff';
+set role authenticated;
+select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-00000000000d', false);
+insert into public.landmarks (cell, kind, title) values ('8a3e6281ba1ffff', 'food', 'Kiosk');
+reset role;
+select test.ok((select public.landmark_points_in(p, 'r10') and not public.landmark_points_in(p, 'r20')
+    from public.landmark_points p where p.user_id = '00000000-0000-0000-0000-00000000000d' and p.reason = 'left'),
+  'landmark points on an unwalked hex count in its district');
+select test.ok(exists (select 1 from public.area_ranking('r10', now() - interval '1 hour', null)
+    where user_id = '00000000-0000-0000-0000-00000000000d'), 'and on its district board');
+delete from public.landmarks where title = 'Kiosk';
 set role authenticated;
 
 -- ---------- anon and account deletion ----------
