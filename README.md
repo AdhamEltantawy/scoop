@@ -103,7 +103,7 @@ Sign in with an emailed code to make Scoop social:
 - **Challenges**: race invited friends over 1–30 days, wherever they live. Each
   of you is ranked in your own district by the points you earn there, and the
   best percentile wins (6th of 500 beats 3rd of 4).
-- **Landmarks**: leave a note on a hex you've walked (a viewpoint, a bit of
+- **Landmarks**: leave a note on the hex you're standing in (a viewpoint, a bit of
   history, street art, nature, food, a hidden gem) with a title and an
   optional note, using the flag button on the right edge (it and the check-in
   button stay there during a walk, so you can do both without stopping). When another explorer
