@@ -416,8 +416,12 @@ select test.throws($$ insert into public.landmarks (cell, kind, title) values ('
 select test.throws($$ insert into public.landmarks (cell, kind, title) values ('8a3e6281ba1ffff', 'view', '   ') $$,
   'a title is needed');
 insert into public.landmarks (cell, kind, title, note) values ('8a3e6281ba1ffff', 'view', '  Nile view ', '  Best at sunset ');
-select test.throws($$ insert into public.landmarks (cell, kind, title) values ('8a3e6281ba1ffff', 'art', 'Again') $$,
-  'one landmark of yours per hex');
+insert into public.landmarks (cell, kind, title) values ('8a3e6281ba1ffff', 'art', 'Again'), ('8a3e6281ba1ffff', 'food', 'And again');
+select test.ok((select count(*) from public.landmarks_near(array[public.h3_to_parent('8a3e6281ba1ffff', 7)]) where cell = '8a3e6281ba1ffff') = 3,
+  'several landmarks on one hex');
+select test.throws($$ insert into public.landmarks (cell, kind, title) values ('8a3e6281ba1ffff', 'gem', 'One more') $$,
+  'at most 3 landmarks of yours per hex');
+delete from public.landmarks where title in ('Again', 'And again');
 select test.throws($$ insert into public.landmarks (user_id, cell, kind, title)
   values ('00000000-0000-0000-0000-00000000000b', '8a3e6281baaffff', 'art', 'Forged') $$, 'cannot leave one as someone else');
 select test.ok((select title = 'Nile view' and note = 'Best at sunset' from public.landmarks), 'title and note are trimmed');

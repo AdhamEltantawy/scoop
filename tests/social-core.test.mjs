@@ -298,17 +298,25 @@ test('mergeRemote picks up hexes walked again on another device', () => {
   assert.equal(local.lastSeen.get('a'), 7000);
 });
 
-test('landmarkToAlert: someone else\'s, not found yet, not told recently', () => {
+test('landmarksToAlert: someone else\'s, not found yet, not told recently', () => {
   const H = 3600000;
   const now = 100 * H;
   const mine = { id: 1, mine: true };
   const found = { id: 2, found_by_me: true };
   const toldEarlier = { id: 3 };
   const fresh = { id: 4 };
-  assert.equal(core.landmarkToAlert([mine, found, toldEarlier, fresh], { 3: now - H }, now), fresh);
-  assert.equal(core.landmarkToAlert([mine, found, toldEarlier], { 3: now - H }, now), null);
-  assert.equal(core.landmarkToAlert([toldEarlier], { 3: now - 13 * H }, now), toldEarlier, 'told again after 12 h');
-  assert.equal(core.landmarkToAlert(undefined, {}, now), null);
+  const fresh2 = { id: 5 };
+  assert.deepEqual(core.landmarksToAlert([mine, found, toldEarlier, fresh], { 3: now - H }, now), [fresh]);
+  assert.deepEqual(core.landmarksToAlert([fresh, toldEarlier, fresh2], { 3: now - H }, now), [fresh, fresh2], 'all new ones in the hex at once');
+  assert.deepEqual(core.landmarksToAlert([mine, found, toldEarlier], { 3: now - H }, now), []);
+  assert.deepEqual(core.landmarksToAlert([toldEarlier], { 3: now - 13 * H }, now), [toldEarlier], 'told again after 12 h');
+  assert.deepEqual(core.landmarksToAlert(undefined, {}, now), []);
+});
+
+test('landmarkRating', () => {
+  assert.equal(core.landmarkRating({ ups: 0, downs: 0 }), null);
+  assert.equal(core.landmarkRating({ ups: 4, downs: 1 }), '👍 4 · 👎 1');
+  assert.equal(core.landmarkRating({ ups: 0, downs: 2 }), '👍 0 · 👎 2');
 });
 
 test('pruneAlerted forgets old alerts', () => {

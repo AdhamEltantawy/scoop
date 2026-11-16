@@ -224,11 +224,13 @@ body.comparing .toast { top: calc(var(--top) + 186px); }
 
 .walk-only { display: none !important; }
 body.walking .walk-only { display: grid !important; }
-body.walking .idle-only, body.walking .edge-controls { display: none !important; }
+body.walking .idle-only { display: none !important; }
+/* While walking, the bottom row has its own locate button; check-in and landmark stay on the edge. */
+body.walking #btnLocate { display: none !important; }
 .community-only, .checkin-only { display: none !important; }
 body.community-on .community-only:not(.idle-only) { display: grid !important; }
 body.community-on:not(.walking) .community-only.idle-only { display: grid !important; }
-body.signed-in:not(.walking) .checkin-only { display: grid !important; }
+body.signed-in .checkin-only { display: grid !important; }
 /* Without community features, keep the walk button centred. */
 body:not(.community-on):not(.walking) .bottom-row::after { content: ''; flex: none; width: 56px; }
 
@@ -654,6 +656,20 @@ div.list-row { cursor: default; }
 }
 .landmark-pin.unfound { font: 700 16px/1 var(--font-display); color: var(--muted); border-style: dashed; border-color: var(--muted); }
 .landmark-pin.found { border-color: var(--friend); }
+/* Several landmarks on one hex */
+.landmark-pin .pin-count {
+  position: absolute; top: -8px; right: -8px;
+  min-width: 18px; height: 18px; padding: 0 4px; border-radius: 9px;
+  display: grid; place-items: center;
+  font: 700 11px/1 var(--font-body); color: var(--on-accent); background: var(--accent);
+}
+/* Rating, shown before you've been there */
+.landmark-pin .pin-rating {
+  position: absolute; left: 50%; bottom: -14px; transform: translateX(-50%);
+  padding: 1px 4px; border-radius: 6px; white-space: nowrap;
+  font: 700 10px/1.2 var(--font-body); color: var(--ink); background: var(--surface);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, .3);
+}
 
 /* ---------- landmark sheet ---------- */
 

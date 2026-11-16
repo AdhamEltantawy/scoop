@@ -445,17 +445,18 @@
   const LANDMARK_QUIET_MS = 12 * 3600000;
 
   /**
-   * The landmark to tell you about in the hex you just entered, or null:
-   * someone else's, not found by you yet, and not one you were told about in
-   * the last `quietMs`. `alerted` maps landmark id → when you were last told.
+   * The landmarks to tell you about in the hex you just entered (a hex can
+   * hold several): someone else's, not found by you yet, and not ones you were
+   * told about in the last `quietMs`. `alerted` maps landmark id → when you
+   * were last told.
    */
-  function landmarkToAlert(here, alerted, now = Date.now(), quietMs = LANDMARK_QUIET_MS) {
-    for (const l of here || []) {
-      if (l.mine || l.found_by_me) continue;
-      if (now - (alerted[l.id] || 0) < quietMs) continue;
-      return l;
-    }
-    return null;
+  function landmarksToAlert(here, alerted, now = Date.now(), quietMs = LANDMARK_QUIET_MS) {
+    return (here || []).filter((l) => !l.mine && !l.found_by_me && now - (alerted[l.id] || 0) >= quietMs);
+  }
+
+  /** "👍 4 · 👎 1", or null before anyone has voted. */
+  function landmarkRating(l) {
+    return l.ups || l.downs ? `👍 ${l.ups || 0} · 👎 ${l.downs || 0}` : null;
   }
 
   /** Forget alerts older than `quietMs`, so the record doesn't grow forever. */
@@ -483,6 +484,6 @@
     checkinPoints, regularBonus, heat, hexValue, hexScore, visitGain, inRing, inCore,
     pickAreas, simplifyLine, inWays, waysBox, parseDistricts, districtAt, periodStart, trendBuckets,
     streaks, localBadges, compare, zoneFilter, cellSig, syncDelta, readyToUpload, mergeRemote, topPercent, chunk, validUsername, timeAgo, parseInvite,
-    landmarkToAlert, pruneAlerted, ordinal,
+    landmarksToAlert, landmarkRating, pruneAlerted, ordinal,
   };
 });

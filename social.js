@@ -1621,8 +1621,11 @@
       });
     }
     if (!S.visited.has(cell)) {
-      return blocked('?', 'Walk this hex first', "Check-ins go on hexes you've walked. This one is still unexplored — walk through it and try again.",
-        'Start walk', () => S.startWalk());
+      return S.walking()
+        ? blocked('?', 'Not counted yet', "Check-ins go on hexes you've walked, and this one counts once you're well inside it. Keep going and try again in a moment.",
+          'OK', S.closeSheet)
+        : blocked('?', 'Walk this hex first', "Check-ins go on hexes you've walked. This one is still unexplored — walk through it and try again.",
+          'Start walk', () => S.startWalk());
     }
     if (isHidden(cell)) {
       return blocked('◌', "You're in a privacy zone", 'Nothing inside your privacy zones is shared, so check-ins are off here.', 'Manage zones', () => {
@@ -1740,6 +1743,7 @@
   const LANDMARK_CHECK_WINDOW_MS = 30 * 60000; // after being told, you can still check it off from afar
   const LANDMARK_ZOOM = 15;
   const LANDMARK_LIMIT = 25;                // keep in sync with landmark_limit() in the migration
+  const LANDMARK_PER_HEX_LIMIT = 3;         // keep in sync with landmark_per_hex_limit()
   const LANDMARK_ALERTS_KEY = 'scoop.landmarkAlerts.v1';
   const Notifier = S.WalkReminder;          // the Android app's own plugin also posts landmark notifications
 
@@ -1802,22 +1806,65 @@
     loadLandmarks(blockOf(at.lat, at.lng));
   }
 
+  const isSecret = (l) => !l.mine && !l.found_by_me;
+
+  /** One pin per hex: a hex can hold several landmarks. */
   function drawLandmarks() {
     landmarkLayer.clearLayers();
-    for (const l of landmarksById.values()) {
-      const kind = kindOf(l);
-      const secret = !l.mine && !l.found_by_me;
-      L.marker(h3.cellToLatLng(l.cell), {
+    for (const [cell, here] of landmarksByCell) {
+      const many = here.length > 1;
+      const shown = here.find((l) => !isSecret(l));
+      const face = shown ? kindOf(shown).icon : '?';
+      const style = here.some((l) => l.mine) ? ' mine' : shown ? ' found' : ' unfound';
+      // Ratings show before you've been there: is it worth the walk?
+      const ups = here.reduce((n, l) => n + (l.ups || 0), 0);
+      const single = here[0];
+      const title = many
+        ? `${here.length} landmarks here`
+        : [isSecret(single) ? 'A landmark · walk through this hex to check it' : single.title, core.landmarkRating(single)]
+          .filter(Boolean).join(' · ');
+      L.marker(h3.cellToLatLng(cell), {
         icon: L.divIcon({
-          className: `landmark-pin${l.mine ? ' mine' : secret ? ' unfound' : ' found'}`,
-          html: secret ? '?' : kind.icon,
+          className: `landmark-pin${style}`,
+          // Only emoji and numbers go in here, never anything people typed.
+          html: face +
+            (many ? `<span class="pin-count">${here.length}</span>` : '') +
+            (ups ? `<span class="pin-rating">👍${ups}</span>` : ''),
           iconSize: [30, 30],
         }),
-        title: secret ? 'A landmark · walk through this hex to check it' : l.title,
+        title,
         zIndexOffset: 500,
-      }).on('click', () => openLandmark(l)).addTo(landmarkLayer);
+      }).on('click', () => openHex(cell)).addTo(landmarkLayer);
     }
     toggleLandmarks();
+  }
+
+  /** A hex's landmarks: straight to the one, or a list when there are several. */
+  function openHex(cell) {
+    const here = landmarksByCell.get(cell) || [];
+    if (here.length === 1) return openLandmark(here[0]);
+    if (!here.length) return toast("Those landmarks aren't around any more");
+    S.openSheet('landmarkSheet');
+    renderHex(cell);
+  }
+
+  function renderHex(cell) {
+    const here = landmarksByCell.get(cell) || [];
+    const secrets = here.filter(isSecret).length;
+    fill($('landmarkBody'), h('div', { class: 'stack' },
+      h('div', { class: 'stack tight', style: 'gap:2px' },
+        sheetHead(`${here.length} landmarks on this hex`),
+        secrets
+          ? h('span', { class: 'me-sub' }, hereCell() === cell
+            ? 'Tap one to check it off'
+            : `Walk through this hex to find out what ${secrets === 1 ? "the hidden one is" : 'the hidden ones are'}`)
+          : null),
+      h('div', { class: 'list-card' }, here.map((l) => h('button', { class: 'list-row', onclick: () => openLandmark(l, cell) },
+        h('span', { dir: 'auto' }, isSecret(l) ? '? A landmark' : `${kindOf(l).icon} ${l.title}`),
+        h('span', { class: 'row-val' }, [l.mine ? 'yours' : null, core.landmarkRating(l) ||
+          (l.finds ? `found ${l.finds}×` : 'not found yet')].filter(Boolean).join(' · ')),
+        h('span', { class: 'chev' }, '›')))),
+      h('button', { class: 'btn', 'data-close': true }, 'Done')));
   }
 
   function toggleLandmarks() {
@@ -1853,20 +1900,28 @@
     if (!here) return;
     // Like hexes, only once you're well inside it: no alerts from walking along the edge.
     if (!core.inCore(latlng.lat, latlng.lng, h3.cellToLatLng(cell), h3.cellToBoundary(cell))) return;
-    const l = core.landmarkToAlert(here, landmarkAlerts);
-    if (l) alertLandmark(l);
+    const fresh = core.landmarksToAlert(here, landmarkAlerts);
+    if (fresh.length) alertLandmarks(fresh);
   }
 
-  function alertLandmark(l) {
-    landmarkAlerts[l.id] = Date.now();
+  /** Tell you about the landmarks in the hex you just entered (one banner for all of them). */
+  function alertLandmarks(list) {
+    const now = Date.now();
+    for (const l of list) landmarkAlerts[l.id] = now;
     landmarkAlerts = core.pruneAlerted(landmarkAlerts);
     saveJSON(LANDMARK_ALERTS_KEY, landmarkAlerts);
-    alertedLandmark = l;
-    const kind = kindOf(l);
+    alertedLandmark = list;
+    const l = list[0];
+    const one = list.length === 1;
+    const kind = one ? kindOf(l) : { icon: '⚑' };
     const by = l.author ? `left by ${l.author}` : 'left by another explorer';
+    const title = one ? l.title : `${list.length} landmarks here`;
+    const rating = one ? core.landmarkRating(l) : null;
     $('landmarkAlertIcon').textContent = kind.icon;
-    $('landmarkAlertTitle').textContent = l.title;
-    $('landmarkAlertSub').textContent = `Landmark here · ${by} · +${core.LANDMARK_POINTS.found} pts`;
+    $('landmarkAlertTitle').textContent = title;
+    $('landmarkAlertSub').textContent = one
+      ? ['Landmark here', by, rating, `+${core.LANDMARK_POINTS.found} pts`].filter(Boolean).join(' · ')
+      : `Check them off for +${core.LANDMARK_POINTS.found} pts each`;
     $('landmarkAlert').hidden = false;
     document.body.classList.add('landmark-alert-on');
     clearTimeout(landmarkAlertTimer);
@@ -1880,8 +1935,13 @@
     }
     // Screen off (the Android app keeps walking in the background): a notification.
     if (Notifier && document.hidden) {
-      Notifier.notifyLandmark({ id: l.id, title: `${kind.icon} ${l.title}`, text: `A landmark here, ${by}. Tap to check it for +${core.LANDMARK_POINTS.found} pts.` })
-        .catch(() => {});
+      Notifier.notifyLandmark({
+        id: l.id,
+        title: `${kind.icon} ${title}`,
+        text: one
+          ? `A landmark here, ${by}. Tap to check it for +${core.LANDMARK_POINTS.found} pts.`
+          : `Tap to check them off for +${core.LANDMARK_POINTS.found} pts each.`,
+      }).catch(() => {});
     }
   }
 
@@ -1893,9 +1953,11 @@
   }
 
   $('btnLandmarkCheck').addEventListener('click', () => {
-    const l = alertedLandmark;
+    const list = alertedLandmark;
     hideLandmarkAlert();
-    if (l) openLandmark(l);
+    if (!list) return;
+    if (list.length === 1) openLandmark(list[0]);
+    else openHex(list[0].cell);
   });
   $('btnLandmarkLater').addEventListener('click', hideLandmarkAlert);
 
@@ -1904,7 +1966,7 @@
     const l = landmarksById.get(Number(id));
     if (l) {
       hideLandmarkAlert();
-      openLandmark(l);
+      openHex(l.cell);
     } else {
       toast("That landmark isn't around any more");
     }
@@ -1928,7 +1990,8 @@
     return hereCell() === l.cell || Date.now() - (landmarkAlerts[l.id] || 0) < LANDMARK_CHECK_WINDOW_MS;
   }
 
-  async function openLandmark(l) {
+  /** `fromHex`: opened from that hex's list, so "Done" goes back to it. */
+  async function openLandmark(l, fromHex = null) {
     S.openSheet('landmarkSheet');
     if (!l.mine && !l.found_by_me && canCheck(l)) {
       fill($('landmarkBody'), h('span', { class: 'fine' }, 'Checking it off…'));
@@ -1948,24 +2011,30 @@
         fail(err);
       }
     }
-    renderLandmark(l);
+    renderLandmark(l, fromHex);
   }
 
-  function renderLandmark(l) {
+  function renderLandmark(l, fromHex = null) {
     const kind = kindOf(l);
-    const secret = !l.mine && !l.found_by_me;
+    const secret = isSecret(l);
     const finds = l.finds === 1 ? 'Found by 1 explorer' : `Found by ${l.finds.toLocaleString()} explorers`;
+    const votes = core.landmarkRating(l);
+    const done = fromHex && (landmarksByCell.get(fromHex) || []).length > 1
+      ? h('button', { class: 'btn', onclick: () => renderHex(fromHex) }, 'Back to this hex')
+      : h('button', { class: 'btn', 'data-close': true }, secret ? 'OK' : 'Done');
     if (secret) {
+      // What it is stays a surprise until you get there, but how explorers rated it doesn't.
       fill($('landmarkBody'), h('div', { class: 'stack' },
         sheetHead('A landmark'),
         h('div', { class: 'blocked' },
           h('div', { class: 'hex-badge quiet', 'aria-hidden': 'true' }, '?'),
           h('span', { class: 'card-title' }, 'Something is here'),
-          h('span', { class: 'body' }, `Another explorer left a landmark on this hex. Walk through it to find out what it is. ${l.finds ? finds + ' so far.' : 'Nobody has found it yet.'}`)),
-        h('button', { class: 'btn', 'data-close': true }, 'OK')));
+          h('span', { class: 'body' }, 'Another explorer left a landmark on this hex. Walk through it to find out what it is.'),
+          h('span', { class: 'sublabel' }, [l.finds ? finds : 'Nobody has found it yet', votes || (l.finds ? 'no votes yet' : null)]
+            .filter(Boolean).join(' · '))),
+        done));
       return;
     }
-    const votes = (l.ups || l.downs) ? `👍 ${l.ups || 0} · 👎 ${l.downs || 0}` : null;
     fill($('landmarkBody'), h('div', { class: 'stack' },
       sheetHead(l.mine ? 'Your landmark' : 'Landmark found'),
       h('div', { class: 'landmark-card' },
@@ -1980,14 +2049,15 @@
         ? h('div', { class: 'panel tint sm' }, h('span', { class: 'body' },
           'Hidden: explorers who found it voted it down, so nobody else sees it or gets told about it.'))
         : null,
-      l.mine ? null : voteBox(l),
+      l.mine ? null : voteBox(l, fromHex),
       l.mine
         ? h('button', { class: 'btn outline danger', onclick: () => removeLandmark(l) }, 'Remove landmark')
-        : h('button', { class: 'btn', 'data-close': true }, 'Done')));
+        : null,
+      l.mine && !fromHex ? null : done));
   }
 
   /** Thumbs up or down, for explorers who found it. */
-  function voteBox(l) {
+  function voteBox(l, fromHex) {
     const vote = async (v) => {
       if (busy) return;
       busy = true;
@@ -1998,7 +2068,8 @@
         l.ups = Number(r.ups) || 0;
         l.downs = Number(r.downs) || 0;
         if (first) toast(v === 1 ? `👍 Thanks · +${core.LANDMARK_POINTS.upvoted} pt for whoever left it` : '👎 Thanks · that helps keep landmarks worth the stop');
-        renderLandmark(l);
+        drawLandmarks(); // the pin shows the rating
+        renderLandmark(l, fromHex);
       } catch (err) {
         fail(err);
       } finally {
@@ -2051,8 +2122,11 @@
         'Locate me', () => { S.closeSheet(); S.locate(); }, body);
     }
     if (!S.visited.has(cell)) {
-      return blocked('?', 'Walk this hex first', "Landmarks go on hexes you've walked. This one is still unexplored — walk through it and try again.",
-        'Start walk', () => S.startWalk(), body);
+      return S.walking()
+        ? blocked('?', 'Not counted yet', "Landmarks go on hexes you've walked, and this one counts once you're well inside it. Keep going and try again in a moment.",
+          'OK', S.closeSheet, body)
+        : blocked('?', 'Walk this hex first', "Landmarks go on hexes you've walked. This one is still unexplored — walk through it and try again.",
+          'Start walk', () => S.startWalk(), body);
     }
     if (isHidden(cell)) {
       return blocked('◌', "You're in a privacy zone", 'Nothing inside your privacy zones is shared, so landmarks are off here.', 'Manage zones', () => {
@@ -2070,8 +2144,13 @@
     } catch (err) {
       // Offline: the server still checks everything on submit.
     }
-    const existing = mine.find((l) => l.cell === cell);
+    const mineHere = mine.filter((l) => l.cell === cell).length;
     const full = mine.length >= LANDMARK_LIMIT;
+    const fullHere = mineHere >= LANDMARK_PER_HEX_LIMIT;
+    // Everything already on this hex (yours and others'), so you don't leave the same thing twice.
+    const mineById = new Map(mine.map((l) => [l.id, l]));
+    const here = (landmarksByCell.get(cell) || []).map((l) => mineById.get(l.id) || l);
+    for (const l of mine) if (l.cell === cell && !here.some((x) => x.id === l.id)) here.push(l);
 
     const title = h('input', { class: 'input note', placeholder: 'Name it, e.g. "Rooftop view of the Nile"', maxlength: '60', dir: 'auto', 'aria-label': 'Title' });
     const note = h('textarea', { class: 'input', placeholder: 'What should people look for? (optional)', maxlength: '280', dir: 'auto', 'aria-label': 'Note' });
@@ -2087,13 +2166,19 @@
     };
     title.addEventListener('input', draw);
 
-    const form = existing
-      ? h('div', { class: 'list-card' },
-        h('button', { class: 'list-row', onclick: () => renderLandmark(existing) },
-          h('span', { dir: 'auto' }, `${kindOf(existing).icon} ${existing.title}`),
-          h('span', { class: 'row-val' }, 'Your landmark here'), h('span', { class: 'chev' }, '›')))
-      : full
-        ? h('span', { class: 'body' }, `You have ${LANDMARK_LIMIT} landmarks out. Remove one below to leave another.`)
+    const onThisHex = here.length ? h('div', { class: 'stack tight' },
+      h('span', { class: 'label' }, `Already on this hex · ${here.length}`),
+      h('div', { class: 'list-card' }, here.map((l) => h('button', {
+        class: 'list-row', onclick: () => (l.mine ? renderLandmark(l) : openLandmark(l)),
+      },
+      h('span', { dir: 'auto' }, isSecret(l) ? '? A landmark · tap to check it' : `${kindOf(l).icon} ${l.title}`),
+      h('span', { class: 'row-val' }, [l.mine ? 'yours' : null, core.landmarkRating(l)].filter(Boolean).join(' · ')),
+      h('span', { class: 'chev' }, '›'))))) : null;
+
+    const form = full
+      ? h('span', { class: 'body' }, `You have ${LANDMARK_LIMIT} landmarks out. Remove one below to leave another.`)
+      : fullHere
+        ? h('span', { class: 'body' }, `You have ${LANDMARK_PER_HEX_LIMIT} landmarks on this hex. Leave the next one somewhere else.`)
         : h('form', {
           class: 'stack tight',
           onsubmit: async (e) => {
@@ -2109,7 +2194,7 @@
               reloadLandmarks();
               renderLeaveLandmark();
             } catch (err) {
-              fail(err.code === '23505' ? new Error('You already have a landmark on this hex') : err);
+              fail(err);
               submit.disabled = !valid();
             }
           },
@@ -2124,6 +2209,7 @@
           h('button', { class: 'icon-btn sm', 'data-close': true, 'aria-label': 'Close' }, '✕')),
         h('span', { class: 'me-sub' }, [district, 'on this hex · explorers who pass through get told'].filter(Boolean).join(' · ')),
         h('span', { class: 'fine' }, `+${core.LANDMARK_POINTS.left} pts now, +${core.LANDMARK_POINTS.wasFound} each time someone finds it, +${core.LANDMARK_POINTS.upvoted} for each 👍.`)),
+      onThisHex,
       form,
       await notificationRow(),
       mine.length ? h('div', { class: 'stack tight' },
