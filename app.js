@@ -390,9 +390,12 @@
     // Stats card
     let km2 = 0;
     const bandCount = HEAT_BANDS.map(() => 0);
+    let heatSum = 0;
     for (const c of visited.keys()) {
       km2 += cellAreaCached(c);
-      bandCount[heatBand(cellHeat(c, now))]++;
+      const h = cellHeat(c, now);
+      heatSum += h;
+      bandCount[heatBand(h)]++;
     }
     $('statCells').textContent = display.size.toLocaleString();
     $('statScore').textContent = Math.round(hexScoreTotal(now)).toLocaleString();
@@ -405,8 +408,9 @@
       seg.style.flex = String(n);
       return seg;
     }).filter(Boolean));
-    const warm = bandCount[0] + bandCount[1] + bandCount[2];
-    $('warmthPct').textContent = `${Math.round((warm / total) * 100)}% warm`;
+    // Average heat, so a hex that's half cooled counts half: the number drops
+    // as soon as anything cools, not only once it's months old.
+    $('warmthPct').textContent = `${Math.round((heatSum / total) * 100)}% warm`;
     if (walk) {
       const pendingKm = walk.pending.reduce((a, p) => a + p.km, 0);
       $('statWalkNew').textContent = '+' + walkNewCount().toLocaleString();
