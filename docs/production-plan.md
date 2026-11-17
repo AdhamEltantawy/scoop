@@ -252,6 +252,13 @@ where users interact.
 
 **Done when** reporting and blocking work in the app, with tests.
 
+**Built (November 2026, `20261121000000_moderation.sql`), widened for circles:** people can be reported too
+(from friends, requests, circle members, guests and circle walks), and three reports on a person stop their
+circles being listed and their asks to join walks. Blocking ends friendships, hides landmarks both ways and
+keeps you out of each other's circles; an owner blocking someone removes them, anyone else leaves the circle
+first. Review in the SQL editor: `select * from moderation.queue;` then
+`select moderation.resolve(<id>, 'keep' | 'remove' | 'ban', 'why');`. Live once the migration is applied.
+
 ## Phase 2: scale
 
 ### 8. Leaderboards and the feed (high)
