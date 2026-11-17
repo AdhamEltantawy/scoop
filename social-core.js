@@ -574,8 +574,8 @@
 
   /** Pull an invite code out of a pasted link or code. */
   function parseInvite(text) {
-    // A personal code ("ZAM-7KQ2": one person, 7 days), or an old-style permanent one.
-    const p = String(text || '').match(/(?:invite=|\b)([a-z]{3}-[a-z0-9]{4})\b/i);
+    // A personal code ("ZAM-7KQ2-XM4P": one person, 7 days), or an old-style permanent one.
+    const p = String(text || '').match(/(?:invite=|\b)([a-z]{3}-[a-z0-9]{4}-[a-z0-9]{4})\b/i);
     if (p) return p[1].toUpperCase();
     const m = String(text || '').match(/(?:invite=)?([0-9a-f]{8})\b/i);
     return m ? m[1].toUpperCase() : null;

@@ -487,7 +487,8 @@ div.list-row { cursor: default; }
 .invite { display: flex; align-items: center; gap: 12px; padding: 14px; border-radius: var(--r-tile); background: var(--surface-2); }
 .invite > div { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
 .invite small { font-size: 11.5px; color: var(--muted); }
-.invite .code { font: 700 20px var(--font-display); letter-spacing: .06em; }
+.invite .code { font: 700 20px var(--font-display); letter-spacing: .06em; overflow-wrap: anywhere; }
+.invite .code.none { font: 500 14px var(--font-body); letter-spacing: 0; color: var(--muted); }
 
 .people { display: flex; flex-direction: column; }
 .person { display: flex; flex-direction: column; gap: 10px; padding: 12px 4px; border-bottom: 1px solid var(--line); }

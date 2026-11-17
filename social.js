@@ -621,13 +621,16 @@
   async function useInvite(code) {
     const [p] = check(await sb.rpc('use_invite', { code }));
     if (!p) return null;
-    if (p.landmark_id) {
+    if (p.status === 'invalid') throw new Error("That code doesn't work. It may have expired or been used already. Ask for a new one");
+    if (p.status === 'slow_down') throw new Error('Too many codes tried. Try again in an hour');
+    if (p.landmark_id && (p.status === 'accepted' || p.status === 'already')) {
       saveJSON(WELCOME_FROM_KEY, { landmark: Number(p.landmark_id), from: nameOf(p) });
       firstsCache = null;
     }
     toast({
       accepted: `You're friends with ${nameOf(p)}` + (p.landmark_id ? ' · they left you a welcome to find' : ''),
       already: `You and ${nameOf(p)} are already friends`,
+      lapsed: `Your friendship with ${nameOf(p)} lapsed. Renew it in Friends`,
       renewing: `Renewed on your side · waiting for ${nameOf(p)}`,
     }[p.status] || `Friend request sent to ${nameOf(p)}`, 4000);
     return p;
@@ -916,8 +919,7 @@
 
   /** The key a reaction is stored under, for items other than walks. */
   const reactionKey = (i) => (i.type === 'checkin' ? String(i.id)
-    : i.type === 'badge' ? `${i.user_id}:${i.badge_key}`
-      : i.type === 'find' ? `${i.landmark_id}:${i.user_id}` : null);
+    : i.type === 'badge' ? `${i.user_id}:${i.badge_key}` : null);
 
   async function loadFeedPage(before) {
     const lim = 20;
@@ -929,14 +931,14 @@
         .lt('created_at', before).order('created_at', { ascending: false }).limit(lim),
       sb.from('badges').select('user_id, badge_key, earned_at, profiles(username, display_name)')
         .lt('earned_at', before).order('earned_at', { ascending: false }).limit(lim),
-      // Friends who found your landmarks (votes stay anonymous).
+      // When your landmarks were found, never by whom (that would give away votes).
       sb.rpc('landmark_finds_feed', { before, lim }),
     ].map((q) => q.then(check)));
     const items = [
       ...walks.map((w) => ({ type: 'walk', at: w.started_at, ...w })),
       ...checkins.map((c) => ({ type: 'checkin', at: c.created_at, ...c })),
       ...badges.map((b) => ({ type: 'badge', at: b.earned_at, ...b })),
-      ...finds.map((f) => ({ type: 'find', at: f.found_at, ...f, user_id: f.finder, profiles: { display_name: f.finder_name } })),
+      ...finds.map((f) => ({ type: 'find', at: f.found_at, ...f, user_id: null, profiles: { display_name: 'Someone' } })),
     ].sort((a, b) => (a.at < b.at ? 1 : -1)).slice(0, lim);
     const [urls, reactions] = await Promise.all([
       photoUrls(items.filter((i) => i.photo_path).map((i) => i.photo_path)),
@@ -945,10 +947,10 @@
     return { items, urls, reactions, more: walks.length === lim || checkins.length === lim || badges.length === lim || finds.length === lim };
   }
 
-  /** Reactions on a page of check-ins, badges and finds: "kind|key" → [{emoji, n, mine}]. */
+  /** Reactions on a page of check-ins and badges: "kind|key" → [{emoji, n, mine}]. */
   async function loadReactions(items) {
     const out = {};
-    await Promise.all(['checkin', 'badge', 'find'].map(async (kind) => {
+    await Promise.all(['checkin', 'badge'].map(async (kind) => {
       const keys = items.filter((i) => i.type === kind).map(reactionKey);
       if (!keys.length) return;
       try {
@@ -962,7 +964,7 @@
     return out;
   }
 
-  /** The four kudos on a friend's check-in, badge or landmark find. */
+  /** The four kudos on a friend's check-in or badge. */
   function reactBar(item, rows) {
     const kind = item.type;
     const key = reactionKey(item);
@@ -1042,7 +1044,7 @@
       extra = [reacts()];
     } else if (item.type === 'find') {
       text = `found your landmark ${(core.LANDMARK_KINDS[item.kind] || { icon: '⚑' }).icon}`;
-      extra = [h('span', { class: 'feed-note', dir: 'auto' }, `“${item.title}”`), reacts()];
+      extra = [h('span', { class: 'feed-note', dir: 'auto' }, `“${item.title}”`)];
     } else {
       const kind = core.CHECKIN_KINDS[item.kind];
       text = item.kind === 'meetup'
@@ -1170,19 +1172,31 @@
 
   /** "Bring someone into Zamalek": a code for one person, carrying your welcome landmark. */
   async function bringSomeoneIn() {
+    // Look without making one: a code only exists once you share it.
     let inv = null;
     try {
-      [inv] = check(await sb.rpc('new_invite'));
+      [inv] = check(await sb.rpc('new_invite', { make: false }));
     } catch (err) {
       // Offline: the rest of the tab still works.
     }
     const where = hoodName() || 'your neighbourhood';
+    const codeEl = h('span', { class: inv && inv.code ? 'code' : 'code none' }, inv && inv.code ? inv.code : 'Made when you share');
     const shared = h('div', { class: 'note-row', hidden: true },
       h('span', { class: 'dot friend pulse' }), h('span', {}, "Code shared. We'll tell you when they join."));
     const share = h('button', {
       class: 'btn sm',
       onclick: async () => {
         try {
+          if (!inv.code) {
+            share.disabled = true;
+            try {
+              [inv] = check(await sb.rpc('new_invite', { make: true }));
+            } finally {
+              share.disabled = false;
+            }
+            codeEl.textContent = inv.code;
+            codeEl.className = 'code';
+          }
           await shareText('Walk with me on Scoop', `Come and walk ${where} with me on Scoop. My code: ${inv.code}`, `${PUBLIC_URL}?invite=${inv.code}`);
           share.textContent = '✓ Shared';
           shared.hidden = false;
@@ -1200,7 +1214,7 @@
         lm ? h('div', { class: 'bring-lm' }, h('span', { 'aria-hidden': 'true' }, lm),
           h('span', { dir: 'auto' }, `“${inv.landmark_title}” will be the first landmark they're pointed to.`)) : null,
         h('div', { class: 'invite' },
-          h('div', {}, h('small', {}, 'Your code'), h('span', { class: 'code' }, inv ? inv.code : '—')),
+          h('div', {}, h('small', {}, 'Your code'), inv ? codeEl : h('span', { class: 'code' }, '—')),
           inv ? share : null)),
       shared,
       h('span', { class: 'fine' }, 'A code works for one person and expires after 7 days. Scoop never reads your contacts.'));

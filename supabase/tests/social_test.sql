@@ -837,20 +837,31 @@ select test.ok((select count(*) = 1 and bool_and(emoji = '❤️' and mine) from
 select public.react('checkin', (select item from bob_checkin), null);
 select test.ok(not exists (select 1 from public.reactions_for('checkin', array[(select item from bob_checkin)])), 'and it can be taken back');
 
--- Who found your landmark: friends by name; carol and dave aren't alice's friends.
-select test.ok((select count(*) = 1 and bool_and(finder_name = 'bob' and title = 'Nile view')
-    from public.landmark_finds_feed(now() + interval '1 minute')), 'your feed names friends who found your landmark, and only them');
-select public.react('find', (select landmark_id || ':' || finder from public.landmark_finds_feed(now() + interval '1 minute')), '👣');
+-- Your landmark was found: when, never by whom (vote totals are public, so a name would give a vote away).
+create temp table finds_feed as select * from public.landmark_finds_feed(now() + interval '1 minute');
+reset role;
+select test.ok((select count(*) = (select count(*) from public.landmark_finds f join public.landmarks l on l.id = f.landmark_id
+        where l.user_id = '00000000-0000-0000-0000-00000000000a') and count(*) > 0 and bool_or(title = 'Nile view')
+    from finds_feed), 'your feed shows every find of your landmarks');
+select test.ok(not exists (select 1 from information_schema.columns c
+    where c.table_name = 'finds_feed' and c.column_name not in ('landmark_id', 'kind', 'title', 'found_at')),
+  'and never who found it');
+set role authenticated;
+select test.throws($$ select public.react('find', '1:00000000-0000-0000-0000-00000000000b', '👣') $$, 'finds take no kudos');
 select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-00000000000c', false);
-select test.ok(not exists (select 1 from public.landmark_finds_feed(now() + interval '1 minute')), 'nobody else''s');
+select test.ok(not exists (select 1 from public.landmark_finds_feed(now() + interval '1 minute') x
+    where x.landmark_id in (select landmark_id from finds_feed)), 'nobody else''s');
 
 -- Personal invite codes.
 select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-00000000000a', false);
 insert into public.landmarks (cell, kind, title, welcome) values ('8a3e6281baaffff', 'food', 'Corner café', true);
+select test.ok((select code is null and landmark_title = 'Corner café' from public.new_invite(false)),
+  'no code until you share one, but you see which welcome it would carry');
 create temp table invite as select * from public.new_invite();
-select test.ok((select code ~ '^ZAM-[A-Z0-9]{4}$' and expires_at > now() + interval '6 days' and landmark_title = 'Corner café' from invite),
+select test.ok((select code ~ '^ZAM-[A-Z0-9]{4}-[A-Z0-9]{4}$' and expires_at > now() + interval '6 days' and landmark_title = 'Corner café' from invite),
   'a personal code, named for your district, carrying your welcome landmark');
 select test.ok((select code from public.new_invite()) = (select code from invite), 'the open code is reused until it''s used');
+select test.ok((select code from public.new_invite(false)) = (select code from invite), 'and shown when you look');
 select test.throws($$ select * from public.use_invite((select code from invite)) $$, 'not your own');
 select test.throws($$ select * from public.invite_codes $$, 'codes are not readable directly');
 select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-00000000000c', false);
@@ -870,10 +881,43 @@ select test.ok((select expires_at < now() + interval '4 days' from public.friend
   'a code never renews a friendship: that stays a choice you both make');
 set role authenticated;
 select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-00000000000d', false);
-select test.throws($$ select * from public.use_invite((select code from invite)) $$, 'each code works for one person');
+select test.ok((select status = 'invalid' and id is null from public.use_invite((select code from invite))),
+  'each code works for one person');
+select test.ok((select status = 'invalid' and id is null from public.use_invite('ZAM-AAAA-AAAA')),
+  'an unknown code gets the same answer as a used one');
 select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-00000000000a', false);
 select test.ok((select used_by_name = 'carol' from public.my_invites() where code = (select code from invite)), 'you see who used your code');
-select test.ok((select code from public.new_invite()) <> (select code from invite), 'and the next one is new');
+create temp table invite2 as select * from public.new_invite();
+grant select on invite2 to authenticated;
+select test.ok((select code from invite2) <> (select code from invite), 'and the next one is new');
+
+-- A lapsed friendship: the code says so, renews nothing, and stays open.
+reset role;
+update public.friendships set expires_at = now() - interval '2 days'
+  where requester = '00000000-0000-0000-0000-00000000000a' and addressee = '00000000-0000-0000-0000-00000000000c';
+set role authenticated;
+select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-00000000000c', false);
+select test.ok((select status = 'lapsed' and username = 'alice' from public.use_invite((select code from invite2))),
+  'a code with a lapsed friend says so');
+reset role;
+select test.ok((select expires_at < now() from public.friendships
+    where requester = '00000000-0000-0000-0000-00000000000a' and addressee = '00000000-0000-0000-0000-00000000000c')
+    and (select used_by is null from public.invite_codes where code = (select code from invite2)),
+  'without renewing it, and the code stays open for someone new');
+
+-- Guessing: 10 wrong codes an hour, then even a right one waits.
+set role authenticated;
+select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-00000000000d', false);
+select count(*) from generate_series(1, 9) n, public.use_invite('ZAM-AAAA-AAA' || n) u where u.status = 'invalid';
+select test.ok((select status = 'slow_down' from public.use_invite((select code from invite2))), 'too many wrong codes: slow down');
+reset role;
+select test.ok((select used_by is null from public.invite_codes where code = (select code from invite2)), 'and the code isn''t used');
+delete from public.invite_misses;
+set role authenticated;
+select test.ok((select status = 'accepted' from public.use_invite((select code from invite2))), 'an hour later it works');
+reset role;
+delete from public.friendships where requester = '00000000-0000-0000-0000-00000000000a' and addressee = '00000000-0000-0000-0000-00000000000d';
+set role authenticated;
 reset role;
 create temp table carol_code as select invite_code as code from public.profiles where username = 'carol';
 grant select on carol_code to authenticated;
