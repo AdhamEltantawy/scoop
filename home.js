@@ -189,6 +189,7 @@
     setTimeout(() => loadWarmth(true), 1500); // after your home district is known
   });
   document.addEventListener('scoop:circles', render);
+  document.addEventListener('scoop:home', () => loadWarmth(true)); // you chose a new home district
   document.addEventListener('scoop:walk-stop', () => setTimeout(() => loadWarmth(true), 5000));
   // GPS fixes come every second or so: look again at most once a minute.
   let lastFixLook = 0;

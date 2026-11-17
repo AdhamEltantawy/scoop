@@ -805,12 +805,16 @@
       const me = board.find((r) => r.user_id === uid());
       if (me) $('meScore').textContent = fmtPts(me.value);
       const KIND = { district: 'District', city: 'City', country: 'Country' };
+      // Your home district can be changed here; the city and country follow it.
       fill($('meAreas'), homes.length ? h('div', { class: 'block' },
         h('span', { class: 'label' }, 'Your areas'),
-        h('div', { class: 'list-card' }, homes.map((a) => h('div', { class: 'list-row' },
+        h('div', { class: 'list-card' }, homes.map((a) => h(a.kind === 'district' ? 'button' : 'div', {
+          class: 'list-row', onclick: a.kind === 'district' ? () => openHome('me') : null,
+        },
           h('span', { dir: 'auto' }, a.name || '?'),
           h('span', { class: 'row-val' }, a.rank ? `#${a.rank} of ${Number(a.total).toLocaleString()}` : KIND[a.kind]),
-          a.rank ? h('span', { class: 'row-val accent' }, `top ${core.topPercent(a.rank, a.total)}%`) : null)))) : null);
+          a.rank ? h('span', { class: 'row-val accent' }, `top ${core.topPercent(a.rank, a.total)}%`) : null,
+          a.kind === 'district' ? h('span', { class: 'chev' }, '›') : null)))) : null);
     } catch (err) {
       // Offline: the local parts of the sheet are already there.
     }
@@ -2598,9 +2602,9 @@
     return {
       walked: { t: 'Take your first walk', m: 'Tap Start walk and head out', act: () => S.closeSheet() },
       home: {
-        t: `Make ${where} home`,
-        m: profile ? 'Keep walking here and it becomes your home district' : 'Sign in and it becomes your home district',
-        act: profile ? () => S.closeSheet() : goSignIn,
+        t: s.homeName ? `${s.homeName} is home` : `Make ${where} home`,
+        m: profile ? 'Choose your home district. It stays yours until you change it' : 'Sign in to make it your home district',
+        act: profile ? () => openHome('firsts') : goSignIn,
       },
       found: {
         t: 'Find a neighbour’s landmark',
@@ -2685,6 +2689,124 @@
         h('span', { dir: 'auto' }, `Your first week in ${name || 'the neighbourhood'}`),
         h('span', { class: 'row-val accent' }, `${core.firstsDone(s)} of ${core.FIRSTS.length} firsts`),
         h('span', { class: 'chev' }, '›'))) : null);
+  });
+
+  // ---------- belonging: your home district ----------
+  //
+  // Home is a district you choose, from the ones you've walked. Until you do,
+  // the app suggests the one you walk most. Once chosen it never changes by
+  // itself: after a walk, the app asks once (per district) if another has
+  // been warmer for you than home in each of the last 3 weeks.
+  const HOME_ASKED_KEY = 'scoop.homeAsked.v1';
+
+  async function homeChoices() {
+    return check(await sb.rpc('home_choices')).map((r) => ({ ...r, hexes: Number(r.hexes) || 0 }));
+  }
+
+  /** Make a district home, then refresh everything that follows it. */
+  async function makeHome(d) {
+    const [r] = check(await sb.rpc('set_home_district', { district: d.id }));
+    firstsCache = null;
+    await Promise.all([loadHomes(), loadFirsts()]);
+    document.dispatchEvent(new CustomEvent('scoop:home', { detail: { id: r.id, name: r.name } }));
+    toast(`${r.name || d.name} is home`);
+  }
+
+  /** The home district chooser, opened from the firsts or from Me. */
+  async function openHome(from) {
+    const back = from === 'me'
+      ? { label: '‹ Me', go: () => $('btnMe').click() }
+      : { label: '‹ Your first week', go: openFirsts };
+    S.openSheet('homeSheet');
+    const head = (title) => [
+      h('button', { class: 'back', onclick: back.go }, back.label),
+      h('div', { class: 'detail-head' },
+        h('span', { class: 'detail-title', dir: 'auto' }, title),
+        h('span', { class: 'card-body' }, 'Home is the neighbourhood you’re a local of. Your district rank and the home panel follow it, and friends see it. It stays put until you change it here.')),
+    ];
+    fill($('homeBody'), h('div', { class: 'stack' }, head('Your home district'), h('span', { class: 'fine' }, 'Loading…')));
+    let rows;
+    try {
+      rows = await homeChoices();
+    } catch (err) {
+      fill($('homeBody'), h('div', { class: 'stack' }, head('Your home district'),
+        h('span', { class: 'fine' }, 'Couldn’t load your districts. Check your connection and try again.')));
+      return;
+    }
+    if (S.currentSheet() !== 'homeSheet') return;
+    const home = rows.find((r) => r.home);
+    const suggestion = home ? null : rows[0];
+    const choose = (d) => async (e) => {
+      const btn = e.currentTarget;
+      btn.disabled = true;
+      try {
+        await makeHome(d);
+        back.go();
+      } catch (err) {
+        btn.disabled = false;
+        fail(err);
+      }
+    };
+    const others = rows.filter((r) => r !== suggestion);
+    fill($('homeBody'), h('div', { class: 'stack' },
+      head(home ? 'Your home district' : 'Make it home'),
+      !rows.length ? h('span', { class: 'card-body' }, 'Take a walk first: only a district you’ve walked can be home.') : null,
+      suggestion ? h('div', { class: 'panel tint' },
+        h('span', { class: 'panel-title', dir: 'auto' }, suggestion.name || 'This district'),
+        h('span', { class: 'card-body' }, `You walk here most · ${suggestion.hexes.toLocaleString()} of your hexes`),
+        h('button', { class: 'btn md', onclick: choose(suggestion) }, `Make ${suggestion.name || 'it'} home`)) : null,
+      others.length ? h('div', { class: 'block' },
+        h('span', { class: 'label' }, suggestion ? 'Somewhere else' : 'Districts you’ve walked'),
+        h('div', { class: 'list-card' }, others.map((r) => h('button', {
+          class: 'list-row', disabled: r.home, onclick: r.home ? null : choose(r),
+        },
+          h('span', { dir: 'auto' }, r.name || '?'),
+          h('span', { class: 'row-val' }, `${r.hexes.toLocaleString()} hex${r.hexes === 1 ? '' : 'es'}`),
+          r.home ? h('span', { class: 'row-val accent' }, 'Home ✓') : h('span', { class: 'chev' }, '›'))))) : null,
+      rows.length ? h('span', { class: 'fine' }, 'Only districts you’ve walked can be home. Your hexes everywhere still count.') : null));
+  }
+
+  // After a walk: ask once, per district, about making it home.
+  document.addEventListener('scoop:summary', async (e) => {
+    if (e.detail.first || !profile) return;
+    let rows;
+    try {
+      rows = await homeChoices();
+    } catch (err) {
+      return; // offline: ask another time
+    }
+    const home = rows.find((r) => r.home);
+    // No home yet: the district you walk most, if you just walked in it.
+    // A home: a district that's been warmer for you in each of the last 3 weeks.
+    const pick = home ? rows.find((r) => r.switch) : rows[0] && rows[0].id === hood.id ? rows[0] : null;
+    if (!pick || !pick.name) return;
+    const asked = loadJSON(HOME_ASKED_KEY, []);
+    if (asked.includes(pick.id)) return;
+    const box = $('summaryExtra');
+    if (!box || S.currentSheet() !== 'summarySheet') return;
+    saveJSON(HOME_ASKED_KEY, [...asked, pick.id].slice(-20));
+    const card = h('div', { class: 'panel tint' },
+      h('span', { class: 'panel-title', dir: 'auto' }, home ? `You’ve been warming ${pick.name} most lately` : `Make ${pick.name} home?`),
+      h('span', { class: 'card-body', dir: 'auto' }, home
+        ? `Make it your home district? ${home.name || 'Your old home'} stays on your map either way.`
+        : 'You walk here most. Home is the neighbourhood you’re a local of, and it stays put until you change it.'),
+      h('div', { class: 'btn-row' },
+        h('button', { class: 'btn ghost', onclick: () => card.remove() }, home ? `Keep ${home.name || 'home'}` : 'Not now'),
+        h('button', {
+          class: 'btn sm',
+          onclick: async (ev) => {
+            const btn = ev.currentTarget;
+            btn.disabled = true;
+            try {
+              await makeHome(pick);
+              card.remove();
+            } catch (err) {
+              btn.disabled = false;
+              fail(err);
+            }
+          },
+        }, 'Make it home')));
+    box.after(card);
   });
 
   // The first walk saved: a welcome to the neighbourhood, and where to go next.
