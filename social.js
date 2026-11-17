@@ -78,6 +78,9 @@
   const fmtKm = (km) => Number(km).toFixed(km >= 10 ? 1 : 2);
   const fmtPts = (n) => Math.round(Number(n) || 0).toLocaleString();
   const avatar = (name, cls = '') => h('span', { class: `avatar ${cls}`, 'aria-hidden': 'true' }, initialOf(name));
+  /** Reporting and blocking (moderation.js), once it has loaded. */
+  const mod = () => (window.scoopKit && window.scoopKit.mod) || null;
+
   const sheetHead = (title) => h('div', { class: 'sheet-head' },
     h('span', { class: 'sheet-title' }, title),
     h('button', { class: 'icon-btn sm', 'data-close': true, 'aria-label': 'Close' }, '✕'));
@@ -853,6 +856,8 @@
       h('div', { class: 'list-card' },
         h('button', { class: 'list-row', onclick: () => sync() },
           h('span', {}, 'Sync now'), h('span', { class: 'row-val', id: 'syncStatus' }, syncStatus), h('span', { class: 'chev' }, '›')),
+        mod() ? h('button', { class: 'list-row', onclick: () => mod().blocked({ back: S.openSettings }) },
+          h('span', {}, 'Blocked people'), h('span', { class: 'chev' }, '›')) : null,
         h('button', { class: 'list-row danger', onclick: deleteAccount }, h('span', {}, 'Delete account'))),
       h('button', {
         class: 'btn outline',
@@ -891,6 +896,9 @@
     renderSocial();
     S.openSheet('socialSheet');
   });
+
+  /** Back from reporting or blocking someone: the Friends sheet as you left it. */
+  const backToSocial = () => S.openSheet('socialSheet');
 
   function renderSocial() {
     if (!profile) return fill($('socialBody'));
@@ -1093,7 +1101,7 @@
     } catch (err) {
       return null;
     }
-    const best = mine.filter((l) => !l.buried).sort((a, b) => Number(b.finds) - Number(a.finds) || (a.created_at < b.created_at ? 1 : -1))[0];
+    const best = mine.filter((l) => !l.buried && !l.held).sort((a, b) => Number(b.finds) - Number(a.finds) || (a.created_at < b.created_at ? 1 : -1))[0];
     if (!best) return null;
     const finds = Number(best.finds) || 0;
     return h('div', { class: 'your-landmark' },
@@ -1276,7 +1284,10 @@
             h('small', {}, st ? [st.district_name, `${fmtPts(st.week)} pts this week`].filter(Boolean).join(' · ') : `@${p.username}`)),
           h('div', { class: 'person-end' },
             st ? h('span', { class: 'score' }, fmtPts(st.score)) : null,
-            h('button', { class: 'link danger', 'aria-label': `Remove ${nameOf(p)}`, onclick: () => removeFriend(r) }, 'Remove'))),
+            mod()
+              ? mod().moreBtn({ id: p.id, name: nameOf(p) },
+                { back: backToSocial, changed: renderSocial, remove: ['Remove friend', () => removeFriend(r)] })
+              : h('button', { class: 'link danger', 'aria-label': `Remove ${nameOf(p)}`, onclick: () => removeFriend(r) }, 'Remove'))),
         h('div', { class: 'person-actions' },
           h('button', {
             class: 'chip', 'aria-pressed': String(!!showing),
@@ -1318,7 +1329,8 @@
             h('div', { class: 'person-who' }, h('span', { dir: 'auto' }, nameOf(r.other)), h('small', {}, `@${r.other.username}`))),
           h('div', { class: 'person-actions' },
             h('button', { class: 'chip status ok', onclick: respond(r, true) }, 'Accept'),
-            h('button', { class: 'link', onclick: respond(r, false) }, 'Decline')))))) : null,
+            h('button', { class: 'link', onclick: respond(r, false) }, 'Decline'),
+            mod() ? mod().moreBtn({ id: r.other.id, name: nameOf(r.other) }, { back: backToSocial, changed: renderSocial }) : null))))) : null,
       h('div', { class: 'block' },
         h('span', { class: 'label' }, `Friends · ${friends.length}`),
         friends.length
@@ -2227,8 +2239,18 @@
       l.mine && l.buried
         ? h('div', { class: 'panel tint sm' }, h('span', { class: 'body' },
           'Hidden: explorers who found it voted it down, so nobody else sees it or gets told about it.'))
-        : null,
+        : l.mine && l.held
+          ? h('div', { class: 'panel tint sm' }, h('span', { class: 'body' },
+            'Hidden while we look at reports about it. Nobody else sees it until then.'))
+          : null,
       l.mine ? null : voteBox(l, fromHex),
+      l.mine || !mod() ? null : h('button', {
+        class: 'link muted',
+        onclick: () => mod().landmark(l, {
+          back: () => { S.openSheet('landmarkSheet'); renderLandmark(l, fromHex); },
+          changed: reloadLandmarks,
+        }),
+      }, 'Report or block'),
       l.mine
         ? h('button', { class: 'btn outline danger', onclick: () => removeLandmark(l) }, 'Remove landmark')
         : null,
@@ -2412,8 +2434,8 @@
         h('span', { class: 'label' }, `Your landmarks · ${mine.length}/${LANDMARK_LIMIT}`),
         h('div', { class: 'list-card' }, mine.map((l) => h('button', { class: 'list-row', onclick: () => renderLandmark(l) },
           h('span', { dir: 'auto' }, `${kindOf(l).icon} ${l.title}`),
-          h('span', { class: l.finds && !l.buried ? 'row-val accent' : 'row-val' },
-            l.buried ? 'hidden' : l.finds ? `found ${l.finds}×${l.ups ? ` · 👍 ${l.ups}` : ''}` : 'not found yet'),
+          h('span', { class: l.finds && !l.buried && !l.held ? 'row-val accent' : 'row-val' },
+            l.buried || l.held ? 'hidden' : l.finds ? `found ${l.finds}×${l.ups ? ` · 👍 ${l.ups}` : ''}` : 'not found yet'),
           h('span', { class: 'chev' }, '›'))))) : null));
     draw();
   }

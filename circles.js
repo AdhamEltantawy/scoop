@@ -473,17 +473,31 @@
         h('div', { class: 'list-card' }, pending.map((p) => h('div', { class: 'list-row' },
           h('span', { dir: 'auto' }, p.name),
           h('button', { class: 'chip status ok', onclick: () => answerGuest(c, p, true) }, 'Say yes'),
-          h('button', { class: 'link danger', onclick: () => answerGuest(c, p, false) }, 'No'))))) : null,
+          h('button', { class: 'link danger', onclick: () => answerGuest(c, p, false) }, 'No'),
+          personMore(c, { id: p.id, name: p.name }))))) : null,
       h('div', { class: 'stack tight' },
         h('span', { class: 'label' }, `Members · ${c.members.length}`),
         h('div', { class: 'list-card' }, c.members.map((m) => h('div', { class: 'list-row' },
           h('span', { dir: 'auto' }, m.me ? 'You' : m.name, m.role === 'owner' ? h('small', { class: 'muted' }, ' · started it') : null),
-          h('span', { class: m.walked_week ? 'row-val friend' : 'row-val' }, m.walked_week ? 'walked this week' : 'not yet this week'))))),
+          h('span', { class: m.walked_week ? 'row-val friend' : 'row-val' }, m.walked_week ? 'walked this week' : 'not yet this week'),
+          m.me ? null : personMore(c, { id: m.id, name: m.name }))))),
       h('div', { class: 'btn-row' },
         h('button', { class: 'btn outline', onclick: () => showInvite(c.id) }, 'Invite someone'),
         isOwner(c) ? h('button', { class: 'btn outline', onclick: () => show(() => renderSetup(c)) }, 'Change') : null),
       h('button', { class: 'link danger', onclick: () => leave(c) }, 'Leave circle'),
       h('span', { class: 'fine' }, 'Members see whether you walked each week, never when or where. A week counts when two of you check in together; every circle gets one free skip a month.')));
+  }
+
+  /** Report or block someone in (or asking to join) a circle. Only its owner can remove people. */
+  function personMore(c, p) {
+    if (!kit.mod) return null;
+    return kit.mod.moreBtn(p, {
+      back: () => show(() => renderHome(c.id)),
+      changed: loadCircles,
+      note: isOwner(c)
+        ? `Blocking ${p.name} also takes them out of ${c.name}.`
+        : `Only whoever started ${c.name} can remove someone, so to block someone in it, leave it first.`,
+    });
   }
 
   async function answerGuest(c, p, accept) {
@@ -825,7 +839,11 @@
                   fail(err);
                 }
               },
-            }, r.kudos_from_me ? '👏 Sent' : '👏 Kudos'));
+            }, r.kudos_from_me ? '👏 Sent' : '👏 Kudos'),
+            r.me || !kit.mod ? null : kit.mod.moreBtn({ id: r.user_id, name: r.name }, {
+              back: () => S.openSheet('summarySheet'),
+              changed: loadCircles,
+            }));
         })),
         bookBlock(c, cw.session)));
     };

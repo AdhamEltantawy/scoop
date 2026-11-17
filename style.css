@@ -938,3 +938,12 @@ body.home-on[data-phase="idle"] .compare-bar { top: calc(var(--top) + 192px); }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; }
 }
+
+/* ---------- report or block ---------- */
+.list-row.choice .tick { flex: none; width: 20px; height: 20px; border-radius: 50%; border: 2px solid var(--line); }
+.list-row.choice[aria-checked="true"] { background: var(--you-tint); }
+.list-row.choice[aria-checked="true"] .tick { border-color: var(--you); background: var(--you); box-shadow: inset 0 0 0 3px var(--surface); }
+.mod-or { padding-top: 14px; border-top: 1px solid var(--line); }
+.icon-btn.more { width: 32px; height: 32px; background: transparent; color: var(--muted); font-size: 18px; letter-spacing: 1px; }
+.list-row > .icon-btn.more { margin-right: -6px; }
+.link.muted { color: var(--muted); font-weight: 500; }
