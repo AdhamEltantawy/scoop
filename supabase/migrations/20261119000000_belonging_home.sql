@@ -249,6 +249,10 @@ create table if not exists public.reactions (
 );
 alter table public.reactions enable row level security;
 revoke all on public.reactions from public, anon, authenticated;
+-- Upgrading from the first version of this file, which also took finds.
+alter table public.reactions drop constraint if exists reactions_kind_check;
+delete from public.reactions where kind not in ('checkin', 'badge');
+alter table public.reactions add constraint reactions_kind_check check (kind in ('checkin', 'badge'));
 
 -- Whose item it is, if it exists.
 create or replace function public.reaction_owner(kind text, item text)
@@ -341,6 +345,11 @@ create table if not exists public.invite_codes (
 create index if not exists invite_codes_user on public.invite_codes (user_id);
 alter table public.invite_codes enable row level security;
 revoke all on public.invite_codes from public, anon, authenticated;
+-- Upgrading from the first version of this file: its short codes could be
+-- guessed, so they go (a new one is made the next time you share).
+alter table public.invite_codes drop constraint if exists invite_codes_code_check;
+delete from public.invite_codes where code !~ '^[A-Z]{3}-[A-Z0-9]{4}-[A-Z0-9]{4}$';
+alter table public.invite_codes add constraint invite_codes_code_check check (code ~ '^[A-Z]{3}-[A-Z0-9]{4}-[A-Z0-9]{4}$');
 
 -- Wrong personal codes tried, kept for an hour.
 create table if not exists public.invite_misses (
