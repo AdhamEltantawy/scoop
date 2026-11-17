@@ -18,3 +18,4 @@ for f in "$root"/supabase/migrations/*.sql; do
 done
 psql -q -o /dev/null -v ON_ERROR_STOP=1 "$url" -f "$root/supabase/tests/social_test.sql"
 psql -q -o /dev/null -v ON_ERROR_STOP=1 "$url" -f "$root/supabase/tests/moderation_test.sql"
+psql -q -o /dev/null -v ON_ERROR_STOP=1 "$url" -f "$root/supabase/tests/app_gate_test.sql"
