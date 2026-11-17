@@ -1576,11 +1576,16 @@
     WalkReminder.takeStartRequest().then((r) => { if (r && r.start) startWalkFromReminder(); }).catch(() => {});
   }
 
+  // A mode on the map (picking a circle's meeting point) can take back/Escape
+  // for itself, to leave the mode.
+  let backOverride = null;
+
   // Android back button: close whatever is open, otherwise send the app to the
   // background (instead of quitting) so a walk in progress keeps recording.
   if (App) {
     App.addListener('backButton', () => {
-      if (dialogDone) dialogDone(null);
+      if (backOverride) backOverride();
+      else if (dialogDone) dialogDone(null);
       else if (anySheetOpen()) closeSheet();
       else if (!$('onboard').hidden && $('onboardCard').querySelector('.dots') === null) hideOnboarding();
       else App.minimizeApp();
@@ -1588,7 +1593,8 @@
   }
   document.addEventListener('keydown', (e) => {
     if (e.key !== 'Escape') return;
-    if (dialogDone) dialogDone(null);
+    if (backOverride) backOverride();
+    else if (dialogDone) dialogDone(null);
     else closeSheet();
   });
 
@@ -1605,6 +1611,10 @@
     startWalk, locate, earnedBadges, renderBadges,
     setServerBadges: (m) => { serverBadges = m; },
     position: () => lastPos,
+    // Stop a walk from re-centring the map on you (until you tap locate).
+    stopFollowing: () => { follow = false; },
+    // fn handles back/Escape instead of the usual; null hands them back.
+    onBack: (fn) => { backOverride = fn || null; },
     walking: () => !!walk,
     // The walk in progress: when it started, how far, and the hexes it has counted so far.
     walkStats: () => (walk ? { start: walk.start, km: walk.km, cells: [...walk.cells.keys()] } : null),

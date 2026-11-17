@@ -814,6 +814,20 @@ button.first:disabled { cursor: default; }
 .place-row > div { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
 .place-row small { font-size: 12.5px; color: var(--muted); }
 .place-row .link { min-height: 28px; }
+.place-actions { flex: none; display: flex; flex-direction: column; align-items: flex-end; }
+.place-actions .link { align-self: auto; }
+
+/* Picking the meeting point: only the map, a pin at its middle and the bar. */
+.meet-pin {
+  position: fixed; left: 50%; top: 50%; z-index: 1000;
+  transform: translate(-50%, -88%);
+  font-size: 36px; line-height: 1;
+  pointer-events: none;
+  filter: drop-shadow(0 3px 4px rgba(0, 0, 0, .35));
+}
+.meet-pick { bottom: calc(30px + var(--safe-bottom)); border: 2px solid var(--you); animation: rise .25s ease-out; }
+body.walking .nudge.meet-pick { display: flex; }
+body.picking-meet :is(#stats, .compare-bar, .edge-controls, .bottom-row, .map-hint, .nudge:not(.meet-pick)) { display: none !important; }
 .chips .chip[aria-pressed="true"] { background: var(--you); border-color: var(--you); color: var(--on-you); }
 .input.time { width: auto; height: 34px; padding: 0 10px; border-radius: 17px; font-size: 13px; }
 
