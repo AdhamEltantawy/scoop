@@ -597,6 +597,7 @@
     loadCheckinMarkers();
     loadHomes();
     reloadLandmarks();
+    setTimeout(checkInvitesUsed, 3000);
     // Signed in now: the pulse can say which explorer of the district you are.
     const pos = S.position();
     if (pos) loadPulse(pos.latlng, true);
@@ -613,13 +614,31 @@
     history.replaceState(null, '', location.pathname);
   }
 
+  // A personal invite can carry a welcome landmark: the first one you're pointed to.
+  const WELCOME_FROM_KEY = 'scoop.welcomeFrom.v1';
+
+  /** Use an invite code: a personal one makes you friends now, an old-style one sends a request. */
+  async function useInvite(code) {
+    const [p] = check(await sb.rpc('use_invite', { code }));
+    if (!p) return null;
+    if (p.landmark_id) {
+      saveJSON(WELCOME_FROM_KEY, { landmark: Number(p.landmark_id), from: nameOf(p) });
+      firstsCache = null;
+    }
+    toast({
+      accepted: `You're friends with ${nameOf(p)}` + (p.landmark_id ? ' · they left you a welcome to find' : ''),
+      already: `You and ${nameOf(p)} are already friends`,
+      renewing: `Renewed on your side · waiting for ${nameOf(p)}`,
+    }[p.status] || `Friend request sent to ${nameOf(p)}`, 4000);
+    return p;
+  }
+
   async function acceptPendingInvite() {
     const code = loadJSON(INVITE_KEY, null);
     if (!code) return;
     localStorage.removeItem(INVITE_KEY);
     try {
-      const [p] = check(await sb.rpc('send_friend_request', { code }));
-      if (p) toast(p.status === 'accepted' ? `You're now friends with ${nameOf(p)}` : `Friend request sent to ${nameOf(p)}`, 4000);
+      await useInvite(code);
     } catch (err) {
       if (!/own code/.test(err.message)) fail(err);
     }
@@ -864,12 +883,8 @@
   const TABS = [['feed', 'Feed'], ['friends', 'Friends'], ['ranks', 'Ranks'], ['challenges', 'Challenges']];
   let tab = loadJSON(TAB_KEY, 'ranks');
   if (!TABS.some(([k]) => k === tab)) tab = 'ranks';
-  /** Challenge sub-view: null (list), 'new', or a challenge row. */
-  let chalView = null;
-
   $('btnSocial').addEventListener('click', () => {
     if (!profile) return openSignIn();
-    chalView = null;
     renderSocial();
     S.openSheet('socialSheet');
   });
@@ -877,19 +892,14 @@
   function renderSocial() {
     if (!profile) return fill($('socialBody'));
     const panel = h('div', { class: 'stack' }, h('span', { class: 'fine' }, 'Loading…'));
-    if (tab === 'challenges' && chalView) {
-      fill($('socialBody'), h('div', { class: 'stack' }, panel));
-    } else {
-      fill($('socialBody'), h('div', { class: 'stack' },
-        sheetHead('Friends'),
-        segmented(h('div', { class: 'seg tabs', 'aria-label': 'Friends sections' }), TABS, tab, (v) => {
-          tab = v;
-          chalView = null;
-          saveJSON(TAB_KEY, tab);
-          renderSocial();
-        }),
-        panel));
-    }
+    fill($('socialBody'), h('div', { class: 'stack' },
+      sheetHead('Friends'),
+      segmented(h('div', { class: 'seg tabs', 'aria-label': 'Friends sections' }), TABS, tab, (v) => {
+        tab = v;
+        saveJSON(TAB_KEY, tab);
+        renderSocial();
+      }),
+      panel));
     const render = { feed: renderFeed, friends: renderFriends, ranks: renderRanks, challenges: renderChallenges }[tab];
     render(panel).catch((err) => {
       fill(panel, h('span', { class: 'body' }, navigator.onLine ? `Couldn't load: ${err.message}` : "You're offline. Your map still works."));
@@ -904,9 +914,14 @@
     return Object.fromEntries(rows.filter((r) => r.signedUrl).map((r) => [r.path, r.signedUrl]));
   }
 
+  /** The key a reaction is stored under, for items other than walks. */
+  const reactionKey = (i) => (i.type === 'checkin' ? String(i.id)
+    : i.type === 'badge' ? `${i.user_id}:${i.badge_key}`
+      : i.type === 'find' ? `${i.landmark_id}:${i.user_id}` : null);
+
   async function loadFeedPage(before) {
     const lim = 20;
-    const [walks, checkins, badges] = await Promise.all([
+    const [walks, checkins, badges, finds] = await Promise.all([
       sb.from('walks').select('id, user_id, started_at, km, new_cells, profiles!walks_user_id_fkey(username, display_name), kudos(user_id, emoji)')
         .lt('started_at', before).order('started_at', { ascending: false }).limit(lim),
       sb.from('checkins')
@@ -914,14 +929,72 @@
         .lt('created_at', before).order('created_at', { ascending: false }).limit(lim),
       sb.from('badges').select('user_id, badge_key, earned_at, profiles(username, display_name)')
         .lt('earned_at', before).order('earned_at', { ascending: false }).limit(lim),
+      // Friends who found your landmarks (votes stay anonymous).
+      sb.rpc('landmark_finds_feed', { before, lim }),
     ].map((q) => q.then(check)));
     const items = [
       ...walks.map((w) => ({ type: 'walk', at: w.started_at, ...w })),
       ...checkins.map((c) => ({ type: 'checkin', at: c.created_at, ...c })),
       ...badges.map((b) => ({ type: 'badge', at: b.earned_at, ...b })),
+      ...finds.map((f) => ({ type: 'find', at: f.found_at, ...f, user_id: f.finder, profiles: { display_name: f.finder_name } })),
     ].sort((a, b) => (a.at < b.at ? 1 : -1)).slice(0, lim);
-    const urls = await photoUrls(items.filter((i) => i.photo_path).map((i) => i.photo_path));
-    return { items, urls, more: walks.length === lim || checkins.length === lim || badges.length === lim };
+    const [urls, reactions] = await Promise.all([
+      photoUrls(items.filter((i) => i.photo_path).map((i) => i.photo_path)),
+      loadReactions(items),
+    ]);
+    return { items, urls, reactions, more: walks.length === lim || checkins.length === lim || badges.length === lim || finds.length === lim };
+  }
+
+  /** Reactions on a page of check-ins, badges and finds: "kind|key" → [{emoji, n, mine}]. */
+  async function loadReactions(items) {
+    const out = {};
+    await Promise.all(['checkin', 'badge', 'find'].map(async (kind) => {
+      const keys = items.filter((i) => i.type === kind).map(reactionKey);
+      if (!keys.length) return;
+      try {
+        for (const r of check(await sb.rpc('reactions_for', { kind, items: keys }))) {
+          (out[`${kind}|${r.item}`] = out[`${kind}|${r.item}`] || []).push({ emoji: r.emoji, n: Number(r.n), mine: r.mine });
+        }
+      } catch (err) {
+        // Shown without counts.
+      }
+    }));
+    return out;
+  }
+
+  /** The four kudos on a friend's check-in, badge or landmark find. */
+  function reactBar(item, rows) {
+    const kind = item.type;
+    const key = reactionKey(item);
+    const own = item.user_id === uid();
+    const bar = h('div', { class: 'kudos' });
+    const draw = () => {
+      const mine = rows.find((r) => r.mine);
+      fill(bar, core.KUDOS.map((emoji) => {
+        const r = rows.find((x) => x.emoji === emoji);
+        return h('button', {
+          class: 'chip', 'aria-pressed': String(!!mine && mine.emoji === emoji), disabled: own,
+          title: own ? 'Kudos from friends show here' : 'Give kudos',
+          onclick: async () => {
+            const taking = mine && mine.emoji === emoji;
+            try {
+              check(await sb.rpc('react', { kind, item: key, emoji: taking ? null : emoji }));
+              if (mine) { mine.n -= 1; mine.mine = false; }
+              rows = rows.filter((x) => x.n > 0);
+              if (!taking) {
+                const x = rows.find((y) => y.emoji === emoji);
+                if (x) { x.n += 1; x.mine = true; } else rows.push({ emoji, n: 1, mine: true });
+              }
+              draw();
+            } catch (err) {
+              fail(err);
+            }
+          },
+        }, emoji, r && r.n ? ` ${r.n}` : '');
+      }));
+    };
+    draw();
+    return bar;
   }
 
   function kudosBar(w) {
@@ -953,10 +1026,11 @@
     return bar;
   }
 
-  function feedItem(item, urls) {
+  function feedItem(item, urls, reactions = {}) {
     const who = item.type === 'checkin' ? item.author : item.profiles;
     const mine = item.user_id === uid();
     const name = mine ? 'You' : nameOf(who);
+    const reacts = () => reactBar(item, reactions[`${item.type}|${reactionKey(item)}`] || []);
     let text;
     let extra = [];
     if (item.type === 'walk') {
@@ -965,6 +1039,10 @@
     } else if (item.type === 'badge') {
       const b = core.BADGES[item.badge_key] || { icon: '🏅', label: item.badge_key };
       text = `earned ${b.icon} ${b.label}`;
+      extra = [reacts()];
+    } else if (item.type === 'find') {
+      text = `found your landmark ${(core.LANDMARK_KINDS[item.kind] || { icon: '⚑' }).icon}`;
+      extra = [h('span', { class: 'feed-note', dir: 'auto' }, `“${item.title}”`), reacts()];
     } else {
       const kind = core.CHECKIN_KINDS[item.kind];
       text = item.kind === 'meetup'
@@ -974,6 +1052,7 @@
         item.note ? h('span', { class: 'feed-note', dir: 'auto' }, item.note) : null,
         urls[item.photo_path] ? h('img', { class: 'feed-photo', src: urls[item.photo_path], alt: item.note || 'Check-in photo', loading: 'lazy' }) : null,
         h('button', { class: 'link', onclick: () => { S.closeSheet(); map.setView(h3.cellToLatLng(item.cell), 17); } }, 'Show on map'),
+        reacts(),
       ];
     }
     return h('div', { class: 'feed-item' },
@@ -991,7 +1070,7 @@
     const load = async () => {
       more.disabled = true;
       const page = await loadFeedPage(before);
-      for (const item of page.items) list.append(feedItem(item, page.urls));
+      for (const item of page.items) list.append(feedItem(item, page.urls, page.reactions));
       if (page.items.length) before = page.items[page.items.length - 1].at;
       more.hidden = !page.more;
       more.disabled = false;
@@ -1000,8 +1079,28 @@
       }
     };
     more.addEventListener('click', () => load().catch(fail));
-    await load();
-    fill(panel, list, more);
+    const [, top] = await Promise.all([load(), yourLandmarkCard()]);
+    fill(panel, top, list, more);
+  }
+
+  /** Your most-found landmark, at the top of the feed: what it has done for you. */
+  async function yourLandmarkCard() {
+    let mine = [];
+    try {
+      mine = check(await sb.rpc('my_landmarks'));
+    } catch (err) {
+      return null;
+    }
+    const best = mine.filter((l) => !l.buried).sort((a, b) => Number(b.finds) - Number(a.finds) || (a.created_at < b.created_at ? 1 : -1))[0];
+    if (!best) return null;
+    const finds = Number(best.finds) || 0;
+    return h('div', { class: 'your-landmark' },
+      h('span', { class: 'emoji', 'aria-hidden': 'true' }, (core.LANDMARK_KINDS[best.kind] || { icon: '⚑' }).icon),
+      h('div', {},
+        h('span', { class: 'kicker' }, best.welcome ? 'Your landmark · a welcome' : 'Your landmark'),
+        h('b', { dir: 'auto' }, `“${best.title}”`),
+        h('small', {}, [finds ? `Found by ${finds} explorer${finds === 1 ? '' : 's'}` : 'Not found yet',
+          Number(best.ups) ? `👍 ${best.ups}` : null, `earned you ${fmtPts(best.points)} pts`].filter(Boolean).join(' · '))));
   }
 
   // ---------- friends, map overlay and compare ----------
@@ -1069,10 +1168,65 @@
       r.theyRenewed ? 'Renew — they did' : r.state === 'lapsed' ? 'Renew' : `Renew · ${daysLeft(r.expires)} days left`);
   }
 
+  /** "Bring someone into Zamalek": a code for one person, carrying your welcome landmark. */
+  async function bringSomeoneIn() {
+    let inv = null;
+    try {
+      [inv] = check(await sb.rpc('new_invite'));
+    } catch (err) {
+      // Offline: the rest of the tab still works.
+    }
+    const where = hoodName() || 'your neighbourhood';
+    const shared = h('div', { class: 'note-row', hidden: true },
+      h('span', { class: 'dot friend pulse' }), h('span', {}, "Code shared. We'll tell you when they join."));
+    const share = h('button', {
+      class: 'btn sm',
+      onclick: async () => {
+        try {
+          await shareText('Walk with me on Scoop', `Come and walk ${where} with me on Scoop. My code: ${inv.code}`, `${PUBLIC_URL}?invite=${inv.code}`);
+          share.textContent = '✓ Shared';
+          shared.hidden = false;
+        } catch (err) {
+          if (!cancelled(err)) fail(err);
+        }
+      },
+    }, 'Share');
+    const lm = inv && inv.landmark_title ? (core.LANDMARK_KINDS[inv.landmark_kind] || { icon: '⚑' }).icon : null;
+    return h('div', { class: 'stack tight' },
+      h('div', { class: 'bring' },
+        h('div', { class: 'bring-head' },
+          h('b', { dir: 'auto' }, `Bring someone into ${where}`),
+          h('small', {}, lm ? "They'll arrive with a welcome from you" : 'Leave a welcome landmark and they’ll be pointed to it first')),
+        lm ? h('div', { class: 'bring-lm' }, h('span', { 'aria-hidden': 'true' }, lm),
+          h('span', { dir: 'auto' }, `“${inv.landmark_title}” will be the first landmark they're pointed to.`)) : null,
+        h('div', { class: 'invite' },
+          h('div', {}, h('small', {}, 'Your code'), h('span', { class: 'code' }, inv ? inv.code : '—')),
+          inv ? share : null)),
+      shared,
+      h('span', { class: 'fine' }, 'A code works for one person and expires after 7 days. Scoop never reads your contacts.'));
+  }
+
+  // Tell you when someone used your code.
+  const INVITES_SEEN_KEY = 'scoop.invitesSeen.v1';
+  async function checkInvitesUsed() {
+    if (!profile) return;
+    try {
+      const rows = check(await sb.rpc('my_invites')).filter((r) => r.used_at);
+      const seen = new Set(loadJSON(INVITES_SEEN_KEY, []));
+      const fresh = rows.filter((r) => !seen.has(r.code));
+      if (fresh.length) toast(`${core.nameList(fresh.map((r) => r.used_by_name || 'Someone'))} joined with your code`, 4000);
+      saveJSON(INVITES_SEEN_KEY, rows.map((r) => r.code));
+    } catch (err) {
+      // Next time.
+    }
+  }
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) checkInvitesUsed(); });
+
   async function renderFriends(panel) {
-    const [rows, code, stats] = await Promise.all([
-      loadFriends(), sb.rpc('my_invite_code').then(check), sb.rpc('friend_stats').then(check),
+    const [rows, bring, stats] = await Promise.all([
+      loadFriends(), bringSomeoneIn(), sb.rpc('friend_stats').then(check),
     ]);
+    checkInvitesUsed();
     const statsById = Object.fromEntries(stats.map((x) => [x.user_id, x]));
     const friends = rows.filter(isFriend).sort((a, b) => a.expires - b.expires);
     const lapsed = rows.filter((r) => r.state === 'lapsed');
@@ -1128,13 +1282,7 @@
 
     const me = statsById[uid()];
     fill(panel,
-      h('div', { class: 'invite' },
-        h('div', {}, h('small', {}, 'Your invite code'), h('span', { class: 'code' }, code)),
-        h('button', {
-          class: 'btn sm',
-          onclick: () => shareText('Scoop', 'Explore the city with me on Scoop!', `${PUBLIC_URL}?invite=${code}`)
-            .catch((err) => { if (!cancelled(err)) fail(err); }),
-        }, 'Share invite')),
+      bring,
       h('form', {
         class: 'inline-form',
         onsubmit: async (e) => {
@@ -1142,11 +1290,7 @@
           const c = core.parseInvite(codeInput.value);
           if (!c) return toast("That doesn't look like an invite code");
           try {
-            const [p] = check(await sb.rpc('send_friend_request', { code: c }));
-            toast({
-              accepted: `You're friends with ${nameOf(p)}`,
-              renewing: `Renewed on your side · waiting for ${nameOf(p)}`,
-            }[p.status] || `Request sent to ${nameOf(p)}`);
+            await useInvite(c);
             renderSocial();
           } catch (err) {
             fail(err);
@@ -1357,11 +1501,14 @@
     // Everyone: all explorers wherever they walk (area null on the server).
     const everyone = rankPrefs.scope === 'everyone';
     const home = everyone ? { id: null, kind: 'everyone' } : areas.find((a) => a.kind === rankPrefs.scope);
-    const rows = check(await sb.rpc('area_leaderboard', { area: home.id, period: rankPrefs.period }));
+    const [rows, extras] = await Promise.all([
+      sb.rpc('area_leaderboard', { area: home.id, period: rankPrefs.period }).then(check),
+      home.kind === 'district' ? districtExtras(home) : [],
+    ]);
     const mine = rows.find((r) => r.is_me);
     const total = rows.length ? rows[0].total : 0;
     const where = everyone ? '' : ` in ${home.name}`;
-    fill(panel, controls,
+    fill(panel, controls, extras,
       h('div', { class: 'panel tint sm' },
         h('span', { class: 'standing', dir: 'auto' }, mine
           ? `You're #${mine.rank} of ${Number(total).toLocaleString()}${everyone ? ' explorers' : where}`
@@ -1373,164 +1520,112 @@
         i > 0 && r.rank > rows[i - 1].rank + 1 ? h('div', { class: 'rank-gap', 'aria-hidden': 'true' }, '…') : null,
         rankRow(r, { me: r.is_me, friend: r.is_friend, name: r.is_me ? myName : r.username ? nameOf(r) : null }),
       ])),
-      h('span', { class: 'fine' }, "People you don't know show as Explorer. Points fade as hexes cool, so the board always reflects recent walking."));
+      h('span', { class: 'fine' }, 'Points fade over 30 days, so ranks show who’s walking lately and anyone can climb. Non-friends always appear as “Explorer”.'));
+  }
+
+  /**
+   * In your district's ranks: how your circle does against the district's
+   * circles (by km together, never members' points), and how close you are
+   * to becoming a local.
+   */
+  async function districtExtras(home) {
+    const out = [];
+    const circle = window.scoopCircles ? window.scoopCircles.circles.find((c) => c.district === home.id) : null;
+    const [standing, firsts] = await Promise.all([
+      circle ? sb.rpc('circle_standing', { circle: circle.id }).then(check).then((r) => r[0]).catch(() => null) : null,
+      loadFirsts().catch(() => null),
+    ]);
+    if (circle && standing && Number(standing.total) > 1) {
+      out.push(h('button', { class: 'rank-card friend', onclick: () => window.scoopCircles.openIntro() },
+        h('span', { class: 'icon', 'aria-hidden': 'true' }, '🤝'),
+        h('div', {}, h('b', { dir: 'auto' }, `Circles in ${home.name}`),
+          h('small', { dir: 'auto' }, `${circle.name} is #${standing.rank} of ${standing.total} this week`)),
+        h('span', { class: 'big-pos' }, `#${standing.rank}`)));
+    }
+    const next = firsts ? core.nextFirst(firsts) : null;
+    if (next) {
+      const done = core.firstsDone(firsts);
+      const left = core.FIRSTS.length - done;
+      out.push(h('button', { class: 'rank-card', onclick: openFirsts },
+        h('span', { class: 'icon', 'aria-hidden': 'true' }, '🏠'),
+        h('div', {}, h('span', { dir: 'auto' }, left === 1
+          ? ['One more first from becoming a ', h('b', {}, `${home.name} local`)]
+          : [`${left} firsts from becoming a `, h('b', {}, `${home.name} local`)])),
+        h('span', { class: 'big-pos' }, `${done}/${core.FIRSTS.length}`)));
+    }
+    return out;
   }
 
   // ---------- challenges ----------
 
-  function challengeStatus(c) {
-    const now = Date.now();
-    const end = Date.parse(c.ends_at);
-    if (end < now) return 'Finished';
-    if (Date.parse(c.starts_at) > now) return 'Not started';
-    const days = Math.ceil((end - now) / 86400000);
-    return `${days} day${days === 1 ? '' : 's'} left`;
-  }
+  // Always shared, never solo: your district against its rival this week,
+  // your circle's weekly goal, becoming a local, and the district's open
+  // challenges (added by an admin with add_area_challenge()).
+
+  const daysLeft2 = (ms) => Math.max(0, Math.ceil((ms - Date.now()) / DAY));
+  const bar = (pct, cls = '') => h('div', { class: `progress ${cls}`, role: 'img', 'aria-label': `${Math.round(pct)}%` },
+    h('div', { class: 'progress-fill', style: `width:${Math.max(0, Math.min(100, pct))}%` }));
 
   async function renderChallenges(panel) {
-    if (chalView === 'new') return renderNewChallenge(panel);
-    if (chalView) return renderChallengeDetail(panel, chalView);
-    const rows = check(await sb.from('challenge_members')
-      .select('status, challenges(id, title, starts_at, ends_at, creator)')
-      .eq('user_id', uid()));
-    const list = rows.filter((r) => r.challenges)
-      .sort((a, b) => (a.challenges.ends_at < b.challenges.ends_at ? 1 : -1));
-    fill(panel,
-      h('button', { class: 'btn outline accent', onclick: () => { chalView = 'new'; renderSocial(); } }, 'New challenge'),
-      list.map((r) => {
-        const c = r.challenges;
-        const invited = r.status === 'invited';
-        return h('button', {
-          class: 'chal-card',
-          onclick: () => { chalView = c; renderSocial(); },
-        },
-        h('span', { class: 'top' }, h('b', { dir: 'auto' }, c.title), h('small', {}, `${invited ? 'Invited' : challengeStatus(c)} ›`)),
-        h('span', { class: 'sub' }, invited ? 'Open it to join' : `${new Date(c.starts_at).toLocaleDateString()} – ${new Date(c.ends_at).toLocaleDateString()}`));
-      }),
-      h('span', { class: 'fine' }, 'Race your friends wherever they live. Each of you is ranked in your own district by the points you earn there ' +
-        'during the challenge, and the best top % wins: 6th of 500 beats 3rd of 4.'));
-  }
-
-  async function renderChallengeDetail(panel, c) {
-    const rows = check(await sb.rpc('challenge_standings', { cid: c.id }));
-    const mine = rows.find((r) => r.user_id === uid());
-    const joined = (r) => r.status === 'joined';
-    const back = () => { chalView = null; renderSocial(); };
-    const leave = async () => {
-      const creator = c.creator === uid();
-      if (creator) {
-        const choice = await confirmDialog({
-          title: 'Delete this challenge?',
-          body: `"${c.title}" ends for everyone and its standings are gone. It can't be undone.`,
-          confirm: 'Delete challenge',
-        });
-        if (choice !== 'confirm') return;
-      }
-      try {
-        if (creator) check(await sb.from('challenges').delete().eq('id', c.id));
-        else check(await sb.from('challenge_members').delete().eq('challenge_id', c.id).eq('user_id', uid()));
-        back();
-      } catch (err) {
-        fail(err);
-      }
-    };
-    fill(panel,
-      h('button', { class: 'back', onclick: back }, '‹ Challenges'),
-      h('div', { class: 'detail-head' },
-        h('span', { class: 'detail-title', dir: 'auto' }, c.title),
-        h('span', { class: 'sub', style: 'font-size:13px' },
-          `${new Date(c.starts_at).toLocaleDateString()} – ${new Date(c.ends_at).toLocaleDateString()} · ${challengeStatus(c)}`)),
-      mine && mine.status === 'invited' ? h('button', {
-        class: 'btn',
-        onclick: async () => {
-          try {
-            check(await sb.from('challenge_members').update({ status: 'joined' }).eq('challenge_id', c.id).eq('user_id', uid()));
-            renderSocial();
-          } catch (err) {
-            fail(err);
-          }
-        },
-      }, 'Join challenge') : null,
-      h('div', { class: 'panel tint' },
-        h('b', { style: 'font-size:14px' }, 'Best top % wins'),
-        h('span', { class: 'card-note' }, 'Each of you is ranked in your own home district by points earned there. 6th of 500 (top 1.1%) beats 3rd of 4 (top 62.5%).')),
-      h('div', { class: 'stack tight', style: 'gap:6px' }, rows.map((r) => {
-        const me = r.user_id === uid();
-        const on = joined(r);
-        const has = on && Number(r.value) > 0;
-        return h('div', { class: `chal-row${me ? ' me' : ''}${has && r.rank === 1 ? ' win' : ''}` },
-          h('span', { class: 'pos' }, on ? String(r.rank) : '–'),
-          h('div', { class: 'who' },
-            h('span', { dir: 'auto' }, me ? `${nameOf(r)} (you)` : nameOf(r)),
-            h('small', {}, on
-              ? (r.district_name ? `${r.district_name} · #${r.district_rank ?? '–'} of ${r.district_total ?? '–'} · ${fmtPts(r.value)} pts` : 'No points yet')
-              : 'Invited')),
-          h('div', { class: 'top-pct' }, h('b', {}, has ? `${r.top_pct}%` : '–'), h('small', {}, 'top')));
-      })),
-      h('span', { class: 'card-note' }, 'Top % counts from the middle of your place, so 1st of 1 is top 50%. No points means last.'),
-      h('button', { class: 'btn outline danger', onclick: leave },
-        c.creator === uid() ? 'Delete challenge' : mine && mine.status === 'invited' ? 'Decline' : 'Leave challenge'));
-  }
-
-  async function renderNewChallenge(panel) {
-    const friends = (await loadFriends()).filter(isFriend).map((r) => r.other);
-    const title = h('input', { class: 'input', placeholder: 'Weekend loop', maxlength: '60', required: true, dir: 'auto' });
-    let days = 7;
-    const picked = new Set(friends.map((p) => p.id));
-    const send = h('button', { class: 'btn', type: 'submit' }, 'Send invites');
-    const valid = () => title.value.trim().length > 0 && picked.size > 0;
-    const refresh = () => { send.disabled = !valid(); };
-    title.addEventListener('input', refresh);
-    const back = () => { chalView = null; renderSocial(); };
-    fill(panel, h('form', {
-      class: 'stack',
-      onsubmit: async (e) => {
-        e.preventDefault();
-        if (!valid()) return;
-        send.disabled = true;
-        try {
-          const start = new Date();
-          const c = check(await sb.from('challenges').insert({
-            title: title.value.trim(),
-            starts_at: start.toISOString(), ends_at: new Date(+start + days * 86400000).toISOString(),
-          }).select('id, title, starts_at, ends_at, creator').single());
-          const invites = [...picked].map((id) => ({ challenge_id: c.id, user_id: id, status: 'invited' }));
-          if (invites.length) check(await sb.from('challenge_members').insert(invites));
-          chalView = c;
-          renderSocial();
-          toast(`Invites sent to ${invites.length} friend${invites.length === 1 ? '' : 's'}`);
-        } catch (err) {
-          fail(err);
-          refresh();
-        }
-      },
-    },
-    h('button', { class: 'back', type: 'button', onclick: back }, '‹ Challenges'),
-    h('span', { class: 'detail-title' }, 'New challenge'),
-    h('label', { class: 'field' }, 'Name', title),
-    h('div', { class: 'block', style: 'gap:6px' },
-      h('span', { class: 'sublabel', style: 'font-size:12.5px' }, 'Length'),
-      segmented(h('div', { class: 'seg', 'aria-label': 'Length' }),
-        [1, 3, 7, 14, 30].map((d) => [d, `${d} day${d === 1 ? '' : 's'}`]), days, (v) => { days = v; })),
-    h('div', { class: 'block', style: 'gap:6px' },
-      h('span', { class: 'sublabel', style: 'font-size:12.5px' }, 'Invite friends'),
-      friends.length
-        ? friends.map((p) => {
-          const row = h('button', {
-            class: 'pick-row', type: 'button', role: 'checkbox', 'aria-checked': 'true',
-            onclick: () => {
-              if (picked.has(p.id)) picked.delete(p.id);
-              else picked.add(p.id);
-              row.setAttribute('aria-checked', String(picked.has(p.id)));
-              row.querySelector('.tick').textContent = picked.has(p.id) ? '✓' : '';
-              refresh();
-            },
-          }, h('span', { dir: 'auto' }, nameOf(p)), h('span', { class: 'tick', 'aria-hidden': 'true' }, '✓'));
-          return row;
-        })
-        : h('span', { class: 'body' }, 'Add friends first to race them.')),
-    send));
-    refresh();
+    const homeD = homes.find((a) => a.kind === 'district');
+    const district = homeD ? { id: homeD.id, name: homeD.name } : hood.id ? { id: hood.id, name: hood.name } : null;
+    if (!district) {
+      fill(panel, h('span', { class: 'body' }, 'Walk a few hexes in a district and its challenges show up here.'));
+      return;
+    }
+    const circles = window.scoopCircles ? window.scoopCircles.circles : [];
+    const [mu, open, firsts] = await Promise.all([
+      sb.rpc('district_matchup', { district: district.id }).then(check).then((r) => r[0]),
+      sb.rpc('area_challenges_for', { district: district.id }).then(check),
+      loadFirsts().catch(() => null),
+    ]);
+    const here = circles.find((c) => c.district === district.id);
+    const ends = Date.parse(mu.ends_at);
+    const matchup = h('div', { class: 'chal-hero' },
+      h('div', { class: 'top' }, h('span', { class: 'label' }, 'This week · neighbourhoods'),
+        h('span', { class: 'sub' }, `${daysLeft2(ends)} day${daysLeft2(ends) === 1 ? '' : 's'} left`)),
+      h('span', { class: 'panel-title', dir: 'auto' }, mu.rival ? `${district.name} vs ${mu.rival_name || 'a neighbour'}` : `${district.name} · ${core.WARMTH_GOAL}% by Sunday`),
+      h('div', { class: 'vs' },
+        h('div', { class: 'vs-row mine' }, h('span', { dir: 'auto' }, district.name), bar(mu.pct), h('b', {}, `${mu.pct}%`)),
+        mu.rival ? h('div', { class: 'vs-row' }, h('span', { dir: 'auto' }, mu.rival_name || 'Rival'), bar(mu.rival_pct, 'quiet'), h('b', {}, `${mu.rival_pct}%`)) : null),
+      h('span', { class: 'sub' }, [
+        mu.rival ? 'Warmest on Sunday night wins the week.' : 'No district in your city to race this week, so it’s a goal instead.',
+        here ? `${here.name} walked ${Math.round(here.week_km * 10) / 10} km together this week.` : null,
+      ].filter(Boolean).join(' ')));
+    const circleGoals = circles.map((c) => h('div', { class: 'chal-goal' },
+      h('div', { class: 'top' }, h('b', { dir: 'auto' }, `${c.name} · ${c.goal_km} km together`), h('span', {}, `${Math.round(c.week_km * 10) / 10} km`)),
+      bar((c.week_km / c.goal_km) * 100, 'friend'),
+      h('span', { class: 'sub' }, `${c.next ? `Next walk ${new Date(c.next.starts).toLocaleString([], { weekday: 'short', hour: '2-digit', minute: '2-digit' })}` : 'No walk booked'} · resets Monday`)));
+    const next = firsts ? core.nextFirst(firsts) : null;
+    const local = next ? h('button', { class: 'rank-card', onclick: openFirsts },
+      h('span', { class: 'big-pos' }, `${core.firstsDone(firsts)}/${core.FIRSTS.length}`),
+      h('div', {}, h('b', { dir: 'auto' }, `Become a ${district.name} local`),
+        h('small', {}, `Your goal · ${core.FIRSTS.length - core.firstsDone(firsts)} first${core.FIRSTS.length - core.firstsDone(firsts) === 1 ? '' : 's'} to go`))) : null;
+    const openList = h('div', { class: 'stack tight' },
+      h('span', { class: 'label' }, `Open to everyone in ${district.name}`),
+      open.length ? open.map((c) => {
+        const btn = h('button', {
+          class: c.joined ? 'chip status ok' : 'btn sm',
+          onclick: async () => {
+            try {
+              check(await sb.rpc('join_area_challenge', { challenge: c.id, join_it: !c.joined }));
+              renderSocial();
+            } catch (err) {
+              fail(err);
+            }
+          },
+        }, c.joined ? '✓ Joined' : 'Join');
+        return h('div', { class: 'open-chal' },
+          h('div', { class: 'top' },
+            h('div', {}, h('b', { dir: 'auto' }, c.title),
+              h('small', { dir: 'auto' }, [c.detail, `${c.members} explorer${Number(c.members) === 1 ? '' : 's'}`,
+                c.ends_at ? `ends ${new Date(c.ends_at).toLocaleDateString([], { weekday: 'short', day: 'numeric', month: 'short' })}` : 'no end date']
+                .filter(Boolean).join(' · '))),
+            btn),
+          bar(Number(c.progress) * 100));
+      }) : h('span', { class: 'body' }, `No open challenges in ${district.name} right now.`));
+    fill(panel, matchup, circleGoals, local, openList,
+      h('span', { class: 'fine' }, 'Challenges are always shared, never solo. Missing a week costs nothing.'));
   }
 
   // ---------- check-ins ----------
@@ -2480,7 +2575,11 @@
   function firstItems(s, name) {
     const where = name || 'your neighbourhood';
     const { all, dist } = openMarks();
-    const pick = core.pickWelcome(all, dist);
+    // Invited by a friend: their welcome comes first, wherever it is.
+    const invited = loadJSON(WELCOME_FROM_KEY, null);
+    const fromFriend = invited ? landmarksById.get(invited.landmark) : null;
+    const pick = fromFriend && !fromFriend.found_by_me ? { l: fromFriend, m: dist(fromFriend), from: invited.from }
+      : core.pickWelcome(all, dist);
     const cafes = pulse && pulse.district === hood.id ? Number(pulse.cafes) || 0 : 0;
     return {
       walked: { t: 'Take your first walk', m: 'Tap Start walk and head out', act: () => S.closeSheet() },
@@ -2492,7 +2591,9 @@
       found: {
         t: 'Find a neighbour’s landmark',
         m: pick
-          ? [`Nearest is ${core.walkDistance(pick.m)} away`, pick.l.ups ? `👍 ${pick.l.ups}` : null].filter(Boolean).join(' · ')
+          ? [pick.from ? `${pick.from} left you one` : null,
+            Number.isFinite(pick.m) ? `${pick.from ? '' : 'Nearest is '}${core.walkDistance(pick.m)} away` : null,
+            pick.l.ups ? `👍 ${pick.l.ups}` : null].filter(Boolean).join(' · ')
           : 'Walk past a ? on the map',
         act: pick ? () => showWelcome(pick) : () => S.closeSheet(),
       },
@@ -2605,7 +2706,11 @@
     sb, check, fail, h, fill, sheetHead, avatar, nameOf, initialOf, fmtKm, distance, shareText, cancelled, PUBLIC_URL,
     uid, get profile() { return profile; }, get session() { return session; },
     openSignIn, hereCell, isHidden: (cell) => isHidden(cell), loadFriends, renewal,
-    hood: () => hood, hoodName, districtOf, openFirsts, forgetFirsts: () => { firstsCache = null; },
+    hood: () => hood, hoodName, districtOf, openFirsts, forgetFirsts: () => { firstsCache = null; }, loadFirsts,
+    get homes() { return homes; },
+    // The friends-and-you warmth layer (the home panel's district tab turns it on).
+    setCommunity: (on) => { communityOn = !!on; communityKey = ''; drawCommunity(); },
+    reactBar, yourLandmarkCard,
     LANDMARK_MAX_ACCURACY,
   };
   document.dispatchEvent(new CustomEvent('scoop:kit', { detail: window.scoopKit }));

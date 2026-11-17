@@ -1195,6 +1195,10 @@
     $('meScore').textContent = Math.round(hexScoreTotal()).toLocaleString();
     $('meStreak').textContent = String(streak.current);
     $('meBest').textContent = String(streak.longest);
+    // Your own map's numbers (the home card shows your district instead, signed in).
+    $('meHexes').textContent = $('statCells').textContent;
+    $('meArea').textContent = $('statArea').textContent;
+    $('meWarm').textContent = ($('warmthPct').textContent.match(/\d+%/) || ['0%'])[0];
     renderTrends();
     renderBadges();
     emit('me-open', {});

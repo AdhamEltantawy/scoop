@@ -410,3 +410,10 @@ test('circle invite codes come out of links', () => {
   assert.equal(core.parseCircleInvite('7E2A9B3C'), '7E2A9B3C');
   assert.equal(core.parseCircleInvite('nope'), null);
 });
+
+test('personal invite codes come out of links too', () => {
+  assert.equal(core.parseInvite('https://x.github.io/scoop/?invite=zam-7kq2'), 'ZAM-7KQ2');
+  assert.equal(core.parseInvite(' ZAM-7KQ2 '), 'ZAM-7KQ2');
+  assert.equal(core.parseInvite('AB12CD34'), 'AB12CD34', 'old-style codes still work');
+  assert.equal(core.parseInvite('ZAMA-7KQ2'), null);
+});

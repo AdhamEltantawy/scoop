@@ -488,6 +488,9 @@
     return FIRSTS.find((k) => !(state && state[k])) || null;
   }
 
+  /** A district's weekly warmth goal, in %. Keep in sync with warmth_goal(). */
+  const WARMTH_GOAL = 80;
+
   /** About five minutes on foot. */
   const NEAR_METERS = 400;
 
@@ -571,6 +574,9 @@
 
   /** Pull an invite code out of a pasted link or code. */
   function parseInvite(text) {
+    // A personal code ("ZAM-7KQ2": one person, 7 days), or an old-style permanent one.
+    const p = String(text || '').match(/(?:invite=|\b)([a-z]{3}-[a-z0-9]{4})\b/i);
+    if (p) return p[1].toUpperCase();
     const m = String(text || '').match(/(?:invite=)?([0-9a-f]{8})\b/i);
     return m ? m[1].toUpperCase() : null;
   }
@@ -581,7 +587,7 @@
     pickAreas, simplifyLine, inWays, waysBox, parseDistricts, districtAt, periodStart, trendBuckets,
     streaks, localBadges, compare, zoneFilter, cellSig, syncDelta, readyToUpload, mergeRemote, topPercent, chunk, validUsername, timeAgo, parseInvite,
     landmarksToAlert, landmarkRating, pruneAlerted, ordinal,
-    FIRSTS, NEAR_METERS, firstsDone, nextFirst, pickWelcome, walkDistance,
+    FIRSTS, NEAR_METERS, WARMTH_GOAL, firstsDone, nextFirst, pickWelcome, walkDistance,
     WEEKDAYS, CHECK_IN_BEFORE_MS, CHECK_IN_AFTER_MS, circleSchedule, nameList, whoIsIn, walkWhen, checkInOpen, togetherHexes,
     parseCircleInvite,
   };

@@ -773,6 +773,120 @@ delete from public.checkins where kind = 'meetup'
   and user_id in ('00000000-0000-0000-0000-00000000000c', '00000000-0000-0000-0000-00000000000d');
 select set_config('realtime.topic', '', false);
 
+-- ---------- belonging: home, matchups, open challenges, reactions, invites ----------
+reset role;
+set role authenticated;
+select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-00000000000a', false);
+create temp table warmth as select * from public.district_warmth('r10');
+reset role;
+select test.ok((select w.hexes = (select count(distinct cell) from public.user_cells where district = 'r10')
+    and w.warm = (select count(*) from (select cell from public.user_cells where district = 'r10'
+      group by cell having max(last_visited) >= now() - interval '60 days') x)
+    and w.pct = round(100.0 * w.warm / w.hexes)
+    and w.mine_warm = (select count(*) from public.user_cells where user_id = '00000000-0000-0000-0000-00000000000a'
+      and district = 'r10' and last_visited >= now() - interval '60 days')
+    from warmth w), 'district warmth: hexes walked by anyone in the last 60 days, and yours');
+set role authenticated;
+select test.throws($$ select * from public.district_warmth('zamalek') $$, 'district ids are checked');
+
+create temp table matchup as select * from public.district_matchup('r10');
+select test.ok((select rival is not null and rival <> 'r10' and pct between 0 and 100 and ends_at > now() from matchup),
+  'a district gets a rival in its city for the week');
+select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-00000000000d', false);
+select test.ok((select rival = 'r10' from public.district_matchup((select rival from matchup))), 'and its rival is paired back');
+select test.ok((select rival from public.district_matchup('r10')) = (select rival from matchup), 'the pairing stays for the week');
+select test.throws($$ select * from public.district_matchups $$, 'pairings are not readable directly');
+
+reset role;
+create temp table open_challenge as select public.add_area_challenge('r10', 'Warm Z1 and Z2', 'Two hexes by the river', 'cells', null,
+  array['8a3e6281ba1ffff', '8a3e6281ba17fff']) as id;
+grant select on open_challenge to authenticated;
+select public.add_area_challenge('r10', 'Over already', null, 'warmth', 50, null, now() - interval '10 days', now() - interval '1 day');
+select public.add_area_challenge('r20', 'Elsewhere', null, 'landmarks');
+set role authenticated;
+select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-00000000000c', false);
+select test.throws($$ select public.add_area_challenge('r10', 'Mine', null, 'warmth', 50) $$, 'only admins add open challenges');
+select test.ok((select count(*) = 1 and bool_and(title = 'Warm Z1 and Z2' and not joined and members = 0 and progress = 1)
+    from public.area_challenges_for('r10')), 'the challenges running in a district, with how far along they are');
+select public.join_area_challenge((select id from open_challenge), true);
+select test.ok((select joined and members = 1 from public.area_challenges_for('r10')), 'joining one');
+select public.join_area_challenge((select id from open_challenge), false);
+select test.ok((select not joined and members = 0 from public.area_challenges_for('r10')), 'and leaving it');
+
+-- Reactions: alice and bob are friends; carol isn't.
+select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-00000000000a', false);
+create temp table bob_checkin as select id::text as item from public.checkins
+  where user_id = '00000000-0000-0000-0000-00000000000b' order by id limit 1;
+select public.react('checkin', (select item from bob_checkin), '🔥');
+select public.react('badge', '00000000-0000-0000-0000-00000000000b:first_meetup', '👏');
+select test.throws($$ select public.react('checkin', (select id::text from public.checkins
+  where user_id = auth.uid() limit 1), '🔥') $$, 'no kudos to yourself');
+select test.throws($$ select public.react('badge', '00000000-0000-0000-0000-00000000000b:hex_10000', '👏') $$, 'only on things that exist');
+select test.throws($$ select public.react('checkin', (select item from bob_checkin), '💩') $$, 'the four kudos only');
+select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-00000000000c', false);
+select test.throws($$ select public.react('checkin', (select item from bob_checkin), '👏') $$, 'kudos are for friends');
+select test.ok(not exists (select 1 from public.reactions_for('checkin', array[(select item from bob_checkin)])),
+  'and strangers don''t see them');
+select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-00000000000b', false);
+select test.ok((select n = 1 and emoji = '🔥' and not mine from public.reactions_for('checkin', array[(select item from bob_checkin)])),
+  'reactions on a check-in');
+select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-00000000000a', false);
+select public.react('checkin', (select item from bob_checkin), '❤️');
+select test.ok((select count(*) = 1 and bool_and(emoji = '❤️' and mine) from public.reactions_for('checkin', array[(select item from bob_checkin)])),
+  'one reaction each: picking another changes it');
+select public.react('checkin', (select item from bob_checkin), null);
+select test.ok(not exists (select 1 from public.reactions_for('checkin', array[(select item from bob_checkin)])), 'and it can be taken back');
+
+-- Who found your landmark: friends by name; carol and dave aren't alice's friends.
+select test.ok((select count(*) = 1 and bool_and(finder_name = 'bob' and title = 'Nile view')
+    from public.landmark_finds_feed(now() + interval '1 minute')), 'your feed names friends who found your landmark, and only them');
+select public.react('find', (select landmark_id || ':' || finder from public.landmark_finds_feed(now() + interval '1 minute')), '👣');
+select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-00000000000c', false);
+select test.ok(not exists (select 1 from public.landmark_finds_feed(now() + interval '1 minute')), 'nobody else''s');
+
+-- Personal invite codes.
+select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-00000000000a', false);
+insert into public.landmarks (cell, kind, title, welcome) values ('8a3e6281baaffff', 'food', 'Corner café', true);
+create temp table invite as select * from public.new_invite();
+select test.ok((select code ~ '^ZAM-[A-Z0-9]{4}$' and expires_at > now() + interval '6 days' and landmark_title = 'Corner café' from invite),
+  'a personal code, named for your district, carrying your welcome landmark');
+select test.ok((select code from public.new_invite()) = (select code from invite), 'the open code is reused until it''s used');
+select test.throws($$ select * from public.use_invite((select code from invite)) $$, 'not your own');
+select test.throws($$ select * from public.invite_codes $$, 'codes are not readable directly');
+select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-00000000000c', false);
+select test.ok((select status = 'accepted' and username = 'alice' and landmark_id is not null
+    from public.use_invite(lower((select code from invite)))), 'using it: friends straight away, with a welcome to find');
+reset role;
+select test.ok((select status = 'accepted' and expires_at between now() + interval '29 days' and now() + interval '31 days'
+    from public.friendships where requester = '00000000-0000-0000-0000-00000000000a' and addressee = '00000000-0000-0000-0000-00000000000c'),
+  'for the usual 30 days');
+update public.friendships set expires_at = now() + interval '3 days'
+  where requester = '00000000-0000-0000-0000-00000000000a' and addressee = '00000000-0000-0000-0000-00000000000c';
+set role authenticated;
+select test.ok((select status = 'already' from public.use_invite((select code from invite))), 'using it again changes nothing');
+reset role;
+select test.ok((select expires_at < now() + interval '4 days' from public.friendships
+    where requester = '00000000-0000-0000-0000-00000000000a' and addressee = '00000000-0000-0000-0000-00000000000c'),
+  'a code never renews a friendship: that stays a choice you both make');
+set role authenticated;
+select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-00000000000d', false);
+select test.throws($$ select * from public.use_invite((select code from invite)) $$, 'each code works for one person');
+select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-00000000000a', false);
+select test.ok((select used_by_name = 'carol' from public.my_invites() where code = (select code from invite)), 'you see who used your code');
+select test.ok((select code from public.new_invite()) <> (select code from invite), 'and the next one is new');
+reset role;
+create temp table carol_code as select invite_code as code from public.profiles where username = 'carol';
+grant select on carol_code to authenticated;
+set role authenticated;
+select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-00000000000d', false);
+select test.ok((select status = 'pending' and username = 'carol' and landmark_id is null
+    from public.use_invite((select code from carol_code))), 'old-style codes still send a friend request');
+reset role;
+delete from public.friendships where requester = '00000000-0000-0000-0000-00000000000d' and addressee = '00000000-0000-0000-0000-00000000000c';
+delete from public.landmarks where title = 'Corner café';
+delete from public.friendships where requester = '00000000-0000-0000-0000-00000000000a' and addressee = '00000000-0000-0000-0000-00000000000c';
+delete from public.reactions;
+
 -- ---------- anon and account deletion ----------
 reset role;
 set role anon;
