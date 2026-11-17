@@ -961,3 +961,23 @@ body.home-on[data-phase="idle"] .compare-bar { top: calc(var(--top) + 192px); }
 .icon-btn.more { width: 32px; height: 32px; background: transparent; color: var(--muted); font-size: 18px; letter-spacing: 1px; }
 .list-row > .icon-btn.more { margin-right: -6px; }
 .link.muted { color: var(--muted); font-weight: 500; }
+
+/* The remote switch (gate.js): covers the app when it's off or this build is too old */
+.gate {
+  position: fixed; inset: 0; z-index: 5000;
+  display: flex; align-items: center; justify-content: center;
+  padding: max(24px, env(safe-area-inset-top)) 22px max(24px, env(safe-area-inset-bottom));
+  background: var(--bg);
+}
+.gate-card {
+  width: 100%; max-width: 380px;
+  display: flex; flex-direction: column; gap: 14px; text-align: center;
+}
+.gate-mark {
+  align-self: center; width: 64px; height: 64px; border-radius: 32px;
+  display: flex; align-items: center; justify-content: center;
+  background: var(--tint); color: var(--accent-ink); font-size: 28px;
+}
+.gate-title { margin: 0; font: 700 26px/1.15 var(--font-display); color: var(--ink); }
+.gate-body { margin: 0 0 6px; font: 400 15.5px/1.45 var(--font-body); color: var(--muted); }
+.gate .btn { display: flex; align-items: center; justify-content: center; text-decoration: none; }

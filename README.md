@@ -182,6 +182,23 @@ It's the same web app wrapped with [Capacitor](https://capacitorjs.com), plus:
 - backups exported through Android's share sheet
 - the back button minimizes the app instead of quitting it, so walks keep going
 
+**Switching it off, or retiring old versions.** In the Supabase SQL editor
+(`supabase/migrations/20261123000000_app_gate.sql` has the details):
+
+```sql
+-- Builds before Scoop 1.0.57 show "Time to update Scoop", which links to the latest release
+update public.app_gate set min_build = 57;
+-- Switch the Android app off for everyone but you (off_web = true covers the web app too)
+update public.app_gate set off = true, message = 'Back on Friday',
+  allowed = array[(select id from auth.users where email = 'you@example.com')];
+-- Back on
+update public.app_gate set off = false, message = null;
+```
+
+The app checks when it starts and when it comes back to the foreground, and
+remembers the answer, so it stays stopped offline. Builds from before this
+switch existed can't be stopped.
+
 **Building locally** (needs Node 22, JDK 21 and the Android SDK):
 
 ```sh
