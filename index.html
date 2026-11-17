@@ -61,6 +61,8 @@
         <div class="stat"><span class="big accent" id="statWalkNew">+0</span><span class="lbl">new hexes</span></div>
         <div class="stat"><span class="big" id="statWalkDist">0.00</span><span class="lbl">km this walk</span></div>
       </div>
+      <!-- Walking with your circle: filled by circles.js -->
+      <div class="together" id="togetherRow" hidden></div>
     </div>
 
     <div class="phase phase-paused">
@@ -106,6 +108,13 @@
     <button class="icon-btn sm" id="btnLandmarkLater" aria-label="Later">✕</button>
   </div>
 
+  <div class="nudge circle-banner" id="circleBanner" role="status" aria-live="polite" hidden>
+    <span class="circle-banner-icon" aria-hidden="true">🤝</span>
+    <div class="nudge-text"><b id="circleBannerTitle" dir="auto"></b><small id="circleBannerSub" dir="auto"></small></div>
+    <button class="btn sm" id="btnCircleBanner">Open</button>
+    <button class="icon-btn sm" id="btnCircleBannerClose" aria-label="Not now">✕</button>
+  </div>
+
   <div class="map-hint" id="mapHint" hidden>Walk past a <b aria-hidden="true">?</b> to see what a neighbour left</div>
 
   <nav class="bottom-row" aria-label="Main">
@@ -142,6 +151,7 @@
       <div class="tile"><span class="tile-num" id="meBest">0</span><span class="tile-lbl">best streak</span></div>
     </div>
     <div id="meFirsts"></div>
+    <div id="meCircles"></div>
     <div id="meSignedOut"></div>
     <div class="panel trend">
       <div class="trend-head"><span class="trend-title" id="trendTitle">New hexes · weekly</span><span class="trend-span" id="trendSpan">12 weeks</span></div>
@@ -242,6 +252,12 @@
     <div id="firstsBody"></div>
   </section>
 
+  <!-- Circles: start one, invite, the next walk, meet up -->
+  <section class="sheet" id="circleSheet" aria-label="Circle" hidden>
+    <div class="grab"></div>
+    <div id="circleBody"></div>
+  </section>
+
   <!-- Walk saved -->
   <section class="sheet summary" id="summarySheet" aria-label="Walk saved" hidden>
     <div class="grab"></div>
@@ -275,5 +291,6 @@
   <script src="districts.js" onerror="this.remove()"></script>
   <script src="areas.js"></script>
   <script src="social.js"></script>
+  <script src="circles.js"></script>
 </body>
 </html>

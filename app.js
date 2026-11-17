@@ -457,6 +457,8 @@
   const App = plugin('App');
   const Filesystem = plugin('Filesystem');
   const Share = plugin('Share');
+  // Circle walk reminders, scheduled on the phone.
+  const LocalNotifications = plugin('LocalNotifications');
   // Our own plugin (android/.../WalkReminderPlugin.java): notices walking, offers to start a walk.
   const WalkReminder = plugin('WalkReminder');
   const tellReminder = (active) => { if (WalkReminder) WalkReminder.setWalking({ active }).catch(() => {}); };
@@ -928,6 +930,7 @@
       recordFix(lastPos.latlng, lastPos.accuracy, Date.now(), null);
     }
     if (isNative) toast('Walk started · you can lock your phone');
+    emit('walk-start', { start: walk.start });
     tellReminder(true);
     clearInterval(ticker);
     ticker = setInterval(updateCard, 1000);
@@ -941,12 +944,14 @@
     const badgesBefore = earnedBadges();
     const summary = { start: walk.start, end: Date.now(), km: +walk.km.toFixed(3), newCells: walk.newCells.size };
     const warmed = [...walk.cells.keys()].filter((c) => !walk.newCells.has(c)).length;
+    const walkCells = [...walk.cells.keys()];
     summary.points = countVisits();
     const saved = summary.km > 0 || summary.newCells > 0 || summary.points > 0;
     if (saved) walks.push(summary);
     walk = null;
     clearInterval(ticker);
     tellReminder(false);
+    emit('walk-stop', { walk: summary, saved, cells: walkCells });
     nudgeFixes = [];
     snoozeNudge(); // you're likely still on your feet; don't ask straight away
     saveNow();
@@ -1590,12 +1595,16 @@
   // Used by social.js (community features) and handy for debugging from the console.
   window.scoop = {
     BASE_RES, COLORS, HEAT_BANDS, map, visited, visits, visitCount, lastSeen, walks, settings, isNative, Filesystem, Share, App, WalkReminder,
+    LocalNotifications,
     render, scheduleRender, toast, formatNum, cellAreaCached, haversine, openSheet, closeSheet, saveNow, emit,
     hexScoreTotal, hexLayer, confirmDialog, segmented, el, fill: fillEl, setIdentity, openMe, openSettings,
     startWalk, locate, earnedBadges, renderBadges,
     setServerBadges: (m) => { serverBadges = m; },
     position: () => lastPos,
     walking: () => !!walk,
+    // The walk in progress: when it started, how far, and the hexes it has counted so far.
+    walkStats: () => (walk ? { start: walk.start, km: walk.km, cells: [...walk.cells.keys()] } : null),
+    updateCard: () => updateCard(),
     currentSheet: () => currentSheet,
   };
   emit('ready', window.scoop);

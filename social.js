@@ -587,6 +587,7 @@
       }
     }
     if (S.currentSheet() === 'socialSheet') renderSocial();
+    document.dispatchEvent(new CustomEvent('scoop:profile', { detail: { profile } }));
   }
 
   function onProfileReady() {
@@ -1047,24 +1048,24 @@
   const isFriend = (r) => r.state === 'active' || r.state === 'renew';
   const daysLeft = (ms) => Math.max(0, Math.ceil((ms - Date.now()) / DAY));
 
-  async function renewFriend(r) {
+  async function renewFriend(r, after = renderSocial) {
     try {
       const [res] = check(await sb.rpc('renew_friendship', { other: r.other.id }));
       toast(res.renewed ? `Renewed · friends with ${nameOf(r.other)} for 30 more days`
         : `Renewed on your side · waiting for ${nameOf(r.other)}`, 4000);
-      renderSocial();
+      after();
     } catch (err) {
       fail(err);
     }
   }
 
   /** Renewal chip: "21 days left", "Renew · 5 days left", "Waiting for them", "Renew — they did". */
-  function renewal(r) {
+  function renewal(r, after = renderSocial) {
     if (r.state === 'active') {
       return h('span', { class: 'chip status ok', role: 'note' }, `${daysLeft(r.expires)} days left`);
     }
     if (r.iRenewed) return h('span', { class: 'chip status quiet', role: 'note' }, 'Waiting for them');
-    return h('button', { class: 'chip status warn', onclick: () => renewFriend(r) },
+    return h('button', { class: 'chip status warn', onclick: () => renewFriend(r, after) },
       r.theyRenewed ? 'Renew — they did' : r.state === 'lapsed' ? 'Renew' : `Renew · ${daysLeft(r.expires)} days left`);
   }
 
@@ -2497,8 +2498,8 @@
       },
       met: {
         t: 'Walk with someone',
-        m: 'Meet a friend on a hex you walked and check in together',
-        act: profile ? () => { S.closeSheet(); $('btnSocial').click(); } : goSignIn,
+        m: 'Start or join a circle, or meet a friend and check in together',
+        act: profile ? () => (window.scoopCircles ? window.scoopCircles.openIntro() : $('btnSocial').click()) : goSignIn,
       },
       coffee: {
         t: 'Check in for coffee',
@@ -2598,4 +2599,14 @@
 
   // Exposed for debugging and end-to-end tests.
   window.scoopSocial = { sb, sync, get profile() { return profile; } };
+
+  // What circles.js builds on.
+  window.scoopKit = {
+    sb, check, fail, h, fill, sheetHead, avatar, nameOf, initialOf, fmtKm, distance, shareText, cancelled, PUBLIC_URL,
+    uid, get profile() { return profile; }, get session() { return session; },
+    openSignIn, hereCell, isHidden: (cell) => isHidden(cell), loadFriends, renewal,
+    hood: () => hood, hoodName, districtOf, openFirsts, forgetFirsts: () => { firstsCache = null; },
+    LANDMARK_MAX_ACCURACY,
+  };
+  document.dispatchEvent(new CustomEvent('scoop:kit', { detail: window.scoopKit }));
 })();

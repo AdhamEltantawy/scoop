@@ -36,3 +36,17 @@ grant usage on schema public to anon, authenticated;
 alter default privileges in schema public grant all on tables to anon, authenticated;
 alter default privileges in schema public grant all on sequences to anon, authenticated;
 alter default privileges in schema public grant all on functions to anon, authenticated;
+
+-- Realtime Authorization: policies on realtime.messages decide who can use a
+-- private channel; realtime.topic() is the channel being joined.
+create schema realtime;
+create table realtime.messages (
+  id bigserial primary key, topic text not null, event text, payload jsonb, private boolean default true
+);
+alter table realtime.messages enable row level security;
+create function realtime.topic() returns text language sql stable as $$
+  select nullif(current_setting('realtime.topic', true), '')
+$$;
+grant usage on schema realtime to anon, authenticated;
+grant select, insert on realtime.messages to authenticated;
+grant usage on sequence realtime.messages_id_seq to authenticated;

@@ -513,6 +513,62 @@
     return `${(m / 1000).toFixed(m < 10000 ? 1 : 0)} km`;
   }
 
+  // ---------- belonging: circles ----------
+
+  const WEEKDAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+  // Keep in sync with circle_check_in(): from half an hour before until two hours after.
+  const CHECK_IN_BEFORE_MS = 30 * 60000;
+  const CHECK_IN_AFTER_MS = 2 * 3600000;
+
+  /** "Thursdays 18:00" */
+  function circleSchedule(weekday, at) {
+    return `${WEEKDAYS[weekday] || '?'}s ${at}`;
+  }
+
+  /** "Nour", "Nour and Omar", "Nour, Omar and Laila" */
+  function nameList(names) {
+    const n = (names || []).filter(Boolean);
+    if (n.length <= 1) return n[0] || '';
+    return `${n.slice(0, -1).join(', ')} and ${n[n.length - 1]}`;
+  }
+
+  /** The others coming on a walk ("in" or on their way), by first name. */
+  function whoIsIn(people, meId) {
+    return (people || []).filter((p) => p.id !== meId && (p.approved !== false) && (p.rsvp === 'in' || p.rsvp === 'omw' || p.checked_in))
+      .map((p) => p.name);
+  }
+
+  /** When a walk is, said from now: "in 1 hour", "in 25 min", "now", "started 10 min ago", or null when further off. */
+  function walkWhen(startsAt, now = Date.now()) {
+    const d = startsAt - now;
+    const min = Math.round(Math.abs(d) / 60000);
+    if (d > 0) {
+      if (min > 120) return null;
+      if (min >= 55) return `in ${Math.round(min / 60)} hour${Math.round(min / 60) === 1 ? '' : 's'}`;
+      return min <= 2 ? 'now' : `in ${min} min`;
+    }
+    if (min <= 2) return 'now';
+    return min < 60 ? `started ${min} min ago` : `started ${Math.floor(min / 60)} h ago`;
+  }
+
+  /** Whether you can check in for a walk starting at `startsAt`. */
+  function checkInOpen(startsAt, now = Date.now()) {
+    return now >= startsAt - CHECK_IN_BEFORE_MS && now <= startsAt + CHECK_IN_AFTER_MS;
+  }
+
+  /** Hexes walked together: everyone's, each hex once. `byPerson` maps person → iterable of hex ids. */
+  function togetherHexes(byPerson) {
+    const all = new Set();
+    for (const cells of Object.values(byPerson || {})) for (const c of cells) all.add(c);
+    return all.size;
+  }
+
+  /** A circle invite code from a link (…?circle=7KQ2AB3C) or the code itself. */
+  function parseCircleInvite(text) {
+    const m = String(text || '').match(/(?:circle=)?([0-9a-f]{8})\b/i);
+    return m ? m[1].toUpperCase() : null;
+  }
+
   /** Pull an invite code out of a pasted link or code. */
   function parseInvite(text) {
     const m = String(text || '').match(/(?:invite=)?([0-9a-f]{8})\b/i);
@@ -526,5 +582,7 @@
     streaks, localBadges, compare, zoneFilter, cellSig, syncDelta, readyToUpload, mergeRemote, topPercent, chunk, validUsername, timeAgo, parseInvite,
     landmarksToAlert, landmarkRating, pruneAlerted, ordinal,
     FIRSTS, NEAR_METERS, firstsDone, nextFirst, pickWelcome, walkDistance,
+    WEEKDAYS, CHECK_IN_BEFORE_MS, CHECK_IN_AFTER_MS, circleSchedule, nameList, whoIsIn, walkWhen, checkInOpen, togetherHexes,
+    parseCircleInvite,
   };
 });
