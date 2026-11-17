@@ -247,6 +247,30 @@
     return { lat, lng };
   }
 
+  /**
+   * The meeting point's district id, looking it up if this device doesn't
+   * know it yet (given up after a few seconds: the server may know it anyway).
+   */
+  async function meetDistrict(cell) {
+    const A = window.scoopAreas;
+    if (!A || !cell) return null;
+    const known = () => {
+      const a = A.of(cell);
+      return (a && a.district) || null;
+    };
+    try {
+      await A.ready;
+      if (known()) return known();
+      // resolve() may be busy with other hexes; then ask once more.
+      for (let i = 0; i < 2 && !known(); i++) {
+        await Promise.race([A.resolve([cell]), new Promise((r) => setTimeout(r, 8000))]);
+      }
+    } catch (e) {
+      // Offline or the lookup failed: the server may know the district anyway.
+    }
+    return known();
+  }
+
   function renderSetup(editing, state = null) {
     const f = state || (editing ? {
       name: editing.name, weekday: editing.weekday, at: editing.at_time, cell: editing.meet_cell, from: 'circle',
@@ -262,6 +286,7 @@
     otherTime.addEventListener('change', () => { if (/^\d\d:\d\d$/.test(otherTime.value)) { f.at = otherTime.value; redo(); } });
     const chip = (label, on, pick, aria) => h('button', { type: 'button', class: 'chip', 'aria-pressed': String(on), 'aria-label': aria || label, onclick: pick }, label);
     const hidden = f.cell && kit.isHidden(f.cell);
+    const meetHood = f.cell && !hidden ? kit.districtOf(latLngOf(f.cell)) : null;
     const useHere = () => {
       const cell = kit.hereCell();
       if (!cell) { toast('Finding you…'); S.locate(); return; }
@@ -276,18 +301,22 @@
       type: 'button', class: 'toggle-row', role: 'switch', 'aria-checked': String(!!f.guests),
       onclick: () => { f.guests = !f.guests; guestsRow.setAttribute('aria-checked', String(f.guests)); },
     }, h('span', {}, 'Welcome guests',
-      h('small', {}, `List it in ${kit.hoodName() || 'your district'} by size and time only. You say yes to each guest.`)),
+      h('small', {}, `List it in ${meetHood ? meetHood.name : 'the meeting point\'s district'} by size and time only. You say yes to each guest.`)),
     h('span', { class: 'switch' }, h('span')));
 
+    let saving = false;
     const submit = async () => {
+      if (saving) return;
       f.name = nameIn.value.trim();
       f.label = labelIn.value.trim();
       if (!f.name) return toast('Give your circle a name');
       if (!f.cell) return toast('Pick a meeting point: tap Change where you want to meet');
       if (kit.isHidden(f.cell)) return toast("That's inside a privacy zone · pick a spot outside it");
+      saving = true;
       const args = {
         name: f.name, weekday: f.weekday, at_time: f.at, tz: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC',
         meet_cell: f.cell, meet_label: f.label || null, goal_km: f.goal, guests: !!f.guests,
+        district: await meetDistrict(f.cell),
       };
       try {
         if (editing) {
@@ -302,6 +331,7 @@
         kit.forgetFirsts();
         return showInvite(id);
       } catch (err) {
+        saving = false;
         return fail(err);
       }
     };
