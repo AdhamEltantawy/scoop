@@ -412,8 +412,10 @@ test('circle invite codes come out of links', () => {
 });
 
 test('personal invite codes come out of links too', () => {
-  assert.equal(core.parseInvite('https://x.github.io/scoop/?invite=zam-7kq2'), 'ZAM-7KQ2');
-  assert.equal(core.parseInvite(' ZAM-7KQ2 '), 'ZAM-7KQ2');
+  assert.equal(core.parseInvite('https://x.github.io/scoop/?invite=zam-7kq2-xm4p'), 'ZAM-7KQ2-XM4P');
+  assert.equal(core.parseInvite(' ZAM-7KQ2-XM4P '), 'ZAM-7KQ2-XM4P');
+  assert.equal(core.parseInvite('Come and walk Zamalek with me on Scoop. My code: ZAM-7KQ2-XM4P'), 'ZAM-7KQ2-XM4P');
   assert.equal(core.parseInvite('AB12CD34'), 'AB12CD34', 'old-style codes still work');
-  assert.equal(core.parseInvite('ZAMA-7KQ2'), null);
+  assert.equal(core.parseInvite('ZAMA-7KQ2-XM4P'), null);
+  assert.equal(core.parseInvite('ZAM-7KQ2'), null, 'short codes are gone');
 });

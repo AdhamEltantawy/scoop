@@ -9,14 +9,15 @@
 --   this week (members' own points stay private).
 -- * Open district challenges, added by an admin (add_area_challenge), that
 --   anyone in the district can join.
--- * Reactions (the four kudos emoji) on check-ins, badges and landmark finds,
---   not only walks.
--- * When a friend finds your landmark, your feed names them. Votes stay
---   anonymous, and strangers stay "an explorer".
--- * Personal invite codes ("ZAM-7KQ2"): one person, 7 days. Using one makes
---   you friends straight away (they shared it, you used it) for the usual 30
---   days, renewed only if you both choose. It points the newcomer to the
---   inviter's welcome landmark.
+-- * Reactions (the four kudos emoji) on check-ins and badges, not only walks.
+-- * When someone finds your landmark, your feed says so, but never who:
+--   vote totals are public, so naming finders would give away their votes.
+-- * Personal invite codes ("ZAM-7KQ2-XM4P"): one person, 7 days. Using one
+--   makes you friends straight away (they shared it, you used it) for the
+--   usual 30 days, renewed only if you both choose. It points the newcomer to
+--   the inviter's welcome landmark. Codes are made only when you share one,
+--   are long enough not to guess, and each account gets 10 wrong tries an
+--   hour, so nobody can make themselves your friend by guessing.
 -- * Friend challenges are no longer shown in the app; their tables stay.
 --
 -- Safe to run again.
@@ -234,13 +235,12 @@ begin
 end $$;
 
 -- ---------- reactions beyond walks ----------
--- Walks keep their kudos table. Check-ins, badges and landmark finds use this.
+-- Walks keep their kudos table. Check-ins and badges use this.
 --   checkin  item = checkins.id
 --   badge    item = '<user id>:<badge key>'
---   find     item = '<landmark id>:<finder id>'
 
 create table if not exists public.reactions (
-  kind text not null check (kind in ('checkin', 'badge', 'find')),
+  kind text not null check (kind in ('checkin', 'badge')),
   item text not null check (char_length(item) <= 80),
   user_id uuid not null references public.profiles (id) on delete cascade,
   emoji text not null check (emoji in ('👏', '🔥', '❤️', '👣')),
@@ -258,14 +258,11 @@ begin
     return (select k.user_id from checkins k where item ~ '^[0-9]{1,18}$' and k.id = item::bigint);
   elsif kind = 'badge' then
     return (select b.user_id from badges b where b.user_id::text = split_part(item, ':', 1) and b.badge_key = split_part(item, ':', 2));
-  elsif kind = 'find' then
-    return (select f.user_id from landmark_finds f where split_part(item, ':', 1) ~ '^[0-9]{1,18}$'
-      and f.landmark_id = split_part(item, ':', 1)::bigint and f.user_id::text = split_part(item, ':', 2));
   end if;
   return null;
 end $$;
 
--- React to a friend's check-in, badge or landmark find (null takes it back).
+-- React to a friend's check-in or badge (null takes it back).
 create or replace function public.react(kind text, item text, emoji text)
 returns void language plpgsql security definer set search_path = public as $$
 #variable_conflict use_column
@@ -302,11 +299,13 @@ begin
   group by r.item, r.emoji;
 end $$;
 
--- ---------- friends finding your landmarks ----------
+-- ---------- someone finding your landmarks ----------
 
--- Friends who found your landmarks, newest first (votes stay anonymous).
-create or replace function public.landmark_finds_feed(before timestamptz, lim int default 20)
-returns table (landmark_id bigint, kind text, title text, finder uuid, finder_name text, found_at timestamptz)
+-- When your landmarks were found, newest first. Never by whom: anyone can see
+-- a landmark's vote totals, so a named finder's vote could be worked out.
+drop function if exists public.landmark_finds_feed(timestamptz, int);
+create function public.landmark_finds_feed(before timestamptz, lim int default 20)
+returns table (landmark_id bigint, kind text, title text, found_at timestamptz)
 language plpgsql stable security definer set search_path = public as $$
 #variable_conflict use_column
 declare
@@ -314,19 +313,24 @@ declare
 begin
   if me is null then raise exception 'Not signed in'; end if;
   return query
-  select l.id, l.kind, l.title, f.user_id, coalesce(p.display_name, p.username), f.found_at
+  select l.id, l.kind, l.title, f.found_at
   from landmarks l
   join landmark_finds f on f.landmark_id = l.id
-  join profiles p on p.id = f.user_id
-  where l.user_id = me and f.found_at < before and are_friends(me, f.user_id)
+  where l.user_id = me and f.user_id <> me and f.found_at < before
   order by f.found_at desc
   limit least(coalesce(lim, 20), 50);
 end $$;
 
 -- ---------- bringing someone in: personal invite codes ----------
 
+-- Three letters of the district, then 8 of 31 characters (~8.5e11 codes).
+create or replace function public.invite_pattern() returns text language sql immutable as
+  $$ select '^[A-Z]{3}-[A-Z0-9]{4}-[A-Z0-9]{4}$' $$;
+-- Wrong personal codes an account may try in an hour.
+create or replace function public.invite_tries() returns int language sql immutable as $$ select 10 $$;
+
 create table if not exists public.invite_codes (
-  code text primary key check (code ~ '^[A-Z]{3}-[A-Z0-9]{4}$'),
+  code text primary key check (code ~ '^[A-Z]{3}-[A-Z0-9]{4}-[A-Z0-9]{4}$'),
   user_id uuid not null references public.profiles (id) on delete cascade,
   landmark_id bigint references public.landmarks (id) on delete set null,
   created_at timestamptz not null default now(),
@@ -338,9 +342,21 @@ create index if not exists invite_codes_user on public.invite_codes (user_id);
 alter table public.invite_codes enable row level security;
 revoke all on public.invite_codes from public, anon, authenticated;
 
--- Your code to share: the one still open, or a new one. It carries your
--- newest welcome landmark, for the newcomer to find first.
-create or replace function public.new_invite()
+-- Wrong personal codes tried, kept for an hour.
+create table if not exists public.invite_misses (
+  user_id uuid not null references public.profiles (id) on delete cascade,
+  at timestamptz not null default now()
+);
+create index if not exists invite_misses_user on public.invite_misses (user_id, at);
+alter table public.invite_misses enable row level security;
+revoke all on public.invite_misses from public, anon, authenticated;
+
+-- Your code to share: the one still open, or (with make) a new one. Codes
+-- are made only when you share, so nobody has one lying open to guess. It
+-- carries your newest welcome landmark, for the newcomer to find first;
+-- without a code, code is null and the landmark is still there.
+drop function if exists public.new_invite();
+create or replace function public.new_invite(make boolean default true)
 returns table (code text, expires_at timestamptz, landmark_id bigint, landmark_title text, landmark_kind text)
 language plpgsql security definer set search_path = public as $$
 #variable_conflict use_column
@@ -360,13 +376,14 @@ begin
     order by i.created_at desc limit 1;
   if c is not null then
     update invite_codes i set landmark_id = lm where i.code = c;
-  else
+  elsif make then
     prefix := upper(left(regexp_replace(coalesce((select a.name from areas a where a.id = home_area(me, 'district')), ''),
       '[^A-Za-z]', '', 'g'), 3));
     if char_length(prefix) < 3 then prefix := 'SCP'; end if;
     for attempt in 1..20 loop
-      c := prefix || '-' || (select string_agg(substr(alphabet, 1 + floor(random() * length(alphabet))::int, 1), '')
-        from generate_series(1, 4));
+      c := prefix || '-' || (select string_agg(substr(alphabet, 1 + floor(random() * length(alphabet))::int, 1)
+          || case when n = 4 then '-' else '' end, '' order by n)
+        from generate_series(1, 8) n);
       begin
         insert into invite_codes (code, user_id, landmark_id) values (c, me, lm);
         exit;
@@ -376,8 +393,8 @@ begin
     end loop;
     if c is null then raise exception 'Couldn''t make a code, try again' using errcode = 'P0001'; end if;
   end if;
-  return query select i.code, i.expires_at, i.landmark_id, l.title, l.kind
-    from invite_codes i left join landmarks l on l.id = i.landmark_id where i.code = c;
+  return query select c, (select i.expires_at from invite_codes i where i.code = c), l.id, l.title, l.kind
+    from (select 1) x left join landmarks l on l.id = lm;
 end $$;
 
 -- Your codes from the last month, and who used them.
@@ -393,6 +410,14 @@ $$;
 -- Use a code: a personal one makes you friends now (for 30 days, renewed
 -- only if you both choose); an old-style one sends a friend request as before.
 -- landmark_id: the welcome to point you to first.
+--
+-- status: accepted   friends now
+--         already    friends already (the code stays open for someone else)
+--         lapsed     your friendship lapsed: renew it, a code never does
+--         invalid    no such code, expired, or used by someone else (one
+--                    answer for all, so codes can't be probed)
+--         slow_down  too many wrong codes in the last hour
+-- Wrong codes come back as a status, not an error, so the try is counted.
 create or replace function public.use_invite(code text)
 returns table (id uuid, username text, display_name text, status text, landmark_id bigint)
 language plpgsql security definer set search_path = public as $$
@@ -401,37 +426,50 @@ declare
   me uuid := auth.uid();
   inv invite_codes;
   f friendships;
+  has_row boolean;
   st text;
 begin
   if me is null then raise exception 'Not signed in'; end if;
-  if upper(btrim(code)) !~ '^[A-Z]{3}-[A-Z0-9]{4}$' then
+  if upper(btrim(code)) !~ invite_pattern() then
     return query select r.id, r.username, r.display_name, r.status, null::bigint from send_friend_request(code) r;
     return;
   end if;
+  -- One try at a time per account, so parallel guesses can't slip past the count.
+  perform pg_advisory_xact_lock(hashtext('use_invite ' || me));
+  delete from invite_misses m where m.user_id = me and m.at < now() - interval '1 hour';
+  if (select count(*) from invite_misses m where m.user_id = me) >= invite_tries() then
+    return query select null::uuid, null::text, null::text, 'slow_down'::text, null::bigint;
+    return;
+  end if;
   select * into inv from invite_codes i where i.code = upper(btrim(use_invite.code)) for update;
-  if not found or inv.expires_at < now() then raise exception 'That invite has expired. Ask for a new one' using errcode = 'P0001'; end if;
-  if inv.user_id = me then raise exception 'That''s your own code' using errcode = 'P0001'; end if;
-  if inv.used_by is not null and inv.used_by <> me then
-    raise exception 'That invite was used already. Each one works for one person' using errcode = 'P0001';
+  if found and inv.user_id = me then raise exception 'That''s your own code' using errcode = 'P0001'; end if;
+  if not found or inv.expires_at < now() or (inv.used_by is not null and inv.used_by <> me) then
+    insert into invite_misses (user_id) values (me);
+    return query select null::uuid, null::text, null::text, 'invalid'::text, null::bigint;
+    return;
   end if;
   select * into f from friendships x
     where (x.requester = me and x.addressee = inv.user_id) or (x.requester = inv.user_id and x.addressee = me);
-  if found and f.status = 'accepted' and f.expires_at < now() - interval '30 days' then
+  has_row := found;
+  if has_row and f.status = 'accepted' and f.expires_at < now() - interval '30 days' then
+    -- Lapsed too long ago: start over.
     delete from friendships x where x.requester = f.requester and x.addressee = f.addressee;
-    f := null;
+    has_row := false;
   end if;
-  if f.requester is null then
-    insert into friendships (requester, addressee, status, expires_at) values (inv.user_id, me, 'accepted', now() + interval '30 days');
-    st := 'accepted';
-  elsif f.status = 'pending' then
-    update friendships x set status = 'accepted', expires_at = now() + interval '30 days'
-      where x.requester = f.requester and x.addressee = f.addressee;
-    st := 'accepted';
+  if has_row and f.status = 'accepted' then
+    -- A code never renews a friendship: that stays a choice you both make.
+    -- Nothing changes, and the code stays open for someone new.
+    st := case when f.expires_at > now() then 'already' else 'lapsed' end;
   else
-    -- Already friends: a code never renews a friendship. That stays a choice you both make.
-    st := 'already';
+    if not has_row then
+      insert into friendships (requester, addressee, status, expires_at) values (inv.user_id, me, 'accepted', now() + interval '30 days');
+    else
+      update friendships x set status = 'accepted', expires_at = now() + interval '30 days'
+        where x.requester = f.requester and x.addressee = f.addressee;
+    end if;
+    st := 'accepted';
+    update invite_codes i set used_by = me, used_at = now() where i.code = inv.code;
   end if;
-  update invite_codes i set used_by = me, used_at = coalesce(i.used_at, now()) where i.code = inv.code;
   return query select p.id, p.username, p.display_name, st, inv.landmark_id from profiles p where p.id = inv.user_id;
 end $$;
 
@@ -439,15 +477,16 @@ end $$;
 
 revoke execute on function public.warm_days(), public.warmth_goal(), public.district_pct(text),
   public.add_area_challenge(text, text, text, text, numeric, text[], timestamptz, timestamptz),
-  public.area_challenge_progress(public.area_challenges, uuid), public.reaction_owner(text, text)
+  public.area_challenge_progress(public.area_challenges, uuid), public.reaction_owner(text, text),
+  public.invite_pattern(), public.invite_tries()
   from public, anon, authenticated;
 revoke execute on function public.district_warmth(text), public.district_matchup(text), public.circle_standing(bigint),
   public.area_challenges_for(text), public.join_area_challenge(bigint, boolean), public.react(text, text, text),
-  public.reactions_for(text, text[]), public.landmark_finds_feed(timestamptz, int), public.new_invite(),
+  public.reactions_for(text, text[]), public.landmark_finds_feed(timestamptz, int), public.new_invite(boolean),
   public.my_invites(), public.use_invite(text)
   from public, anon;
 grant execute on function public.district_warmth(text), public.district_matchup(text), public.circle_standing(bigint),
   public.area_challenges_for(text), public.join_area_challenge(bigint, boolean), public.react(text, text, text),
-  public.reactions_for(text, text[]), public.landmark_finds_feed(timestamptz, int), public.new_invite(),
+  public.reactions_for(text, text[]), public.landmark_finds_feed(timestamptz, int), public.new_invite(boolean),
   public.my_invites(), public.use_invite(text)
   to authenticated;
