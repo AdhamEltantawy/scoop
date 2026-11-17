@@ -267,7 +267,7 @@
 
   const accuracyCircle = L.circle([0, 0], {
     pane: 'here', radius: 1, color: COLORS.here, weight: 1, opacity: 0.35,
-    fillColor: COLORS.here, fillOpacity: 0.1, interactive: false,
+    fillColor: COLORS.here, fillOpacity: 0.16, interactive: false,
   });
   const youMarker = L.circleMarker([0, 0], {
     pane: 'here', radius: 8, color: '#fff', weight: 3, fillColor: COLORS.here, fillOpacity: 1, interactive: false,
@@ -988,9 +988,12 @@
         badge ? el('div', { class: 'new-badge' },
           el('div', { class: 'hex-badge hot' }, badge.glyph),
           el('div', {}, el('b', {}, `New badge: ${badge.label}`), el('small', {}, badge.desc))) : null,
+        // Filled by the community layer: the welcome to your neighbourhood after a first walk.
+        el('div', { id: 'summaryExtra' }),
         reminderOffer(),
-        el('button', { class: 'btn', onclick: closeSheet }, 'Done')));
+        el('button', { class: 'btn', id: 'summaryDone', onclick: closeSheet }, 'Done')));
     openSheet('summarySheet');
+    emit('summary', { walk: w, first: walks.length === 1 });
   }
 
   // ---------- walk reminders (Android app) ----------
@@ -1466,12 +1469,16 @@
   // ---------- onboarding (first launch) ----------
 
   const ONBOARDED_KEY = 'scoop.onboarded.v1';
+  // Three cards: what Scoop is, that routes stay on the phone, and why it needs location.
   const ONB = [
-    { t: 'Explore your city on foot, one hexagon at a time', b: 'Every street-sized hex you walk through lights up on your map.', p: 'Next', hexes: 'walk' },
-    { t: 'Warm means recent', b: "Hexes you just walked glow ember. Over the weeks they cool — walk them again to warm them up. They're never lost.", p: 'Next', hexes: 'heat' },
-    { t: 'Private by default', b: 'Your map lives on this phone. Scoop never draws or uploads your routes. Friends are optional.', p: 'Next' },
-    { t: 'Scoop needs your location while you walk', b: "It's only used to light up hexes. Nothing leaves your phone unless you sign in.", p: 'Allow location', s: 'Not now' },
+    { t: 'Every walk warms your neighbourhood', b: 'Each street-sized hex you walk lights up. Your neighbours are warming theirs too, and it all adds up on one shared map.', p: 'Next', mark: 'word' },
+    { t: 'Private by default', b: 'Your map lives on this phone. Scoop never draws or uploads your routes. Neighbours only ever see "an explorer", and friends are up to you.', p: 'Next', mark: 'lock' },
+    { t: 'Scoop needs your location while you walk', b: "It lights up hexes and shows you what's nearby. Your location and routes stay on this phone; Scoop only looks up totals for your area.", p: 'Allow location', s: 'Not now', mark: 'pin' },
   ];
+  const ONB_ICONS = {
+    lock: '<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 018 0v3"/>',
+    pin: '<path d="M12 21s-7-6.2-7-11.5a7 7 0 0114 0C19 14.8 12 21 12 21z"/><circle cx="12" cy="9.5" r="2.5"/>',
+  };
   const DENIED = {
     t: 'Location is off',
     b: isNative
@@ -1494,15 +1501,16 @@
   function showOnboarding(step) {
     const ob = step === 'denied' ? DENIED : ONB[step];
     const onbHex = (fill, stroke) => el('div', { class: 'onb-hex', style: `background:${stroke}` }, el('i', { style: `background:${fill}` }));
-    let hexes = null;
-    if (ob.hexes === 'walk') {
-      hexes = el('div', { class: 'onb-hexes' },
-        onbHex(COLORS.walk, COLORS.walkStroke), onbHex(COLORS.walk, COLORS.walkStroke),
-        onbHex(HEAT_BANDS[0].color, HEAT_BANDS[0].stroke),
-        onbHex('var(--surface)', HEAT_BANDS[4].color), onbHex('var(--surface)', HEAT_BANDS[4].color));
-    } else if (ob.hexes === 'heat') {
-      hexes = [el('div', { class: 'onb-hexes' }, HEAT_BANDS.map((b) => onbHex(b.color, b.stroke))),
-        el('div', { class: 'onb-scale' }, el('span', {}, 'Just walked'), el('span', {}, '100+ days'))];
+    let mark = null;
+    if (ob.mark === 'word') {
+      // The wordmark over the heat scale, warmest first.
+      mark = el('div', { class: 'onb-mark' },
+        el('span', { class: 'onb-word', 'aria-hidden': 'true' }, 'scoop'),
+        el('div', { class: 'onb-hexes', 'aria-hidden': 'true' }, HEAT_BANDS.map((b) => onbHex(b.color, b.stroke))));
+    } else if (ONB_ICONS[ob.mark]) {
+      const icon = el('div', { class: 'onb-icon', 'aria-hidden': 'true' });
+      icon.innerHTML = `<svg viewBox="0 0 24 24">${ONB_ICONS[ob.mark]}</svg>`; // fixed markup, nothing user-supplied
+      mark = icon;
     }
     const next = () => {
       if (step === 'denied') return requestLocation();
@@ -1516,13 +1524,13 @@
       showOnboarding('denied');
     };
     fillEl($('onboardCard'),
-      hexes,
+      mark,
       el('div', { class: 'onb-text' }, el('span', { class: 'onb-title' }, ob.t), el('span', { class: 'body' }, ob.b)),
+      step === 'denied' ? null : el('div', { class: 'dots', 'aria-hidden': 'true' },
+        ONB.map((_, i) => el('span', { class: i === step ? 'on' : '' }))),
       el('div', { class: 'onb-actions' },
         el('button', { class: 'btn', onclick: next }, ob.p),
-        ob.s ? el('button', { class: 'btn ghost', onclick: skip }, ob.s) : null),
-      step === 'denied' ? null : el('div', { class: 'dots', 'aria-hidden': 'true' },
-        ONB.map((_, i) => el('span', { class: i === step ? 'on' : '' }))));
+        ob.s ? el('button', { class: 'btn ghost', onclick: skip }, ob.s) : null));
     closeSheet();
     $('onboard').hidden = false;
   }

@@ -565,6 +565,7 @@
     if (!changed && profile) return;
     profile = null;
     homes = [];
+    firstsCache = null;
     clearFriendOverlay();
     document.body.classList.toggle('signed-in', false);
     if (session) {
@@ -595,6 +596,9 @@
     loadCheckinMarkers();
     loadHomes();
     reloadLandmarks();
+    // Signed in now: the pulse can say which explorer of the district you are.
+    const pos = S.position();
+    if (pos) loadPulse(pos.latlng, true);
   }
 
   // Fires once at startup with the saved session (or null), then on every change.
@@ -1758,6 +1762,10 @@
   let landmarkAlerts = core.pruneAlerted(loadJSON(LANDMARK_ALERTS_KEY, {}));
   let alertedLandmark = null;
   let landmarkAlertTimer = null;
+  /** The neighbourhood around you, from area_pulse() (see "belonging" below). */
+  let pulse = null;
+  /** Your neighbourhood firsts, once worked out (see "belonging" below). */
+  let firstsCache = null;
   const landmarkLayer = L.layerGroup();
   const kindOf = (l) => core.LANDMARK_KINDS[l.kind] || { icon: '⚑', label: 'Landmark' };
   const blockOf = (lat, lng) => h3.latLngToCell(lat, lng, LANDMARK_BLOCK_RES);
@@ -1792,6 +1800,23 @@
     }
   }
 
+  /**
+   * Signed out: "?" pins from the neighbourhood pulse (where landmarks are and
+   * how they're rated, nothing more). Tapping one asks you to sign in.
+   */
+  function showTeasers(pins) {
+    if (profile) return;
+    landmarksByCell = new Map();
+    landmarksById = new Map();
+    (pins || []).forEach((p, i) => {
+      const l = { id: -(i + 1), teaser: true, cell: p.cell, ups: Number(p.ups) || 0, downs: 0, finds: 0, welcome: !!p.welcome };
+      if (!landmarksByCell.has(l.cell)) landmarksByCell.set(l.cell, []);
+      landmarksByCell.get(l.cell).push(l);
+      landmarksById.set(l.id, l);
+    });
+    drawLandmarks();
+  }
+
   /** Load around you, or around the map when there's no GPS fix. */
   function reloadLandmarks() {
     if (!profile) {
@@ -1799,6 +1824,7 @@
       landmarksById = new Map();
       landmarkBlocks = new Set();
       drawLandmarks();
+      if (pulse) showTeasers(pulse.pins);
       return;
     }
     const pos = S.position();
@@ -1869,7 +1895,7 @@
   }
 
   function toggleLandmarks() {
-    const on = !!profile && map.getZoom() >= LANDMARK_ZOOM;
+    const on = landmarksByCell.size > 0 && map.getZoom() >= LANDMARK_ZOOM;
     if (on && !map.hasLayer(landmarkLayer)) landmarkLayer.addTo(map);
     if (!on && map.hasLayer(landmarkLayer)) map.removeLayer(landmarkLayer);
   }
@@ -1994,14 +2020,19 @@
   /** `fromHex`: opened from that hex's list, so "Done" goes back to it. */
   async function openLandmark(l, fromHex = null) {
     S.openSheet('landmarkSheet');
-    if (!l.mine && !l.found_by_me && canCheck(l)) {
+    let justFound = false;
+    if (!l.teaser && !l.mine && !l.found_by_me && canCheck(l)) {
       fill($('landmarkBody'), h('span', { class: 'fine' }, 'Checking it off…'));
       try {
         const [r] = check(await sb.rpc('find_landmark', { landmark: l.id }));
         l.found_by_me = true;
         l.finds = Number(r.finds) || l.finds + 1;
         drawLandmarks();
-        if (r.first_time) toast(`${kindOf(l).icon} Landmark found · +${core.LANDMARK_POINTS.found} pts · you're the ${core.ordinal(l.finds)} explorer to find it`, 4000);
+        if (r.first_time) {
+          justFound = true;
+          if (firstsCache) firstsCache.found = true;
+          toast(`${kindOf(l).icon} Landmark found · +${core.LANDMARK_POINTS.found} pts · you're the ${core.ordinal(l.finds)} explorer to find it`, 4000);
+        }
       } catch (err) {
         if (/gone/.test(err.message)) {
           S.closeSheet();
@@ -2012,10 +2043,23 @@
         fail(err);
       }
     }
-    renderLandmark(l, fromHex);
+    renderLandmark(l, fromHex, justFound);
   }
 
-  function renderLandmark(l, fromHex = null) {
+  /** Hexes flying out from a hex badge: something just landed. */
+  function burst(glyph) {
+    const colours = ['var(--heat-0)', 'var(--heat-1)', 'var(--heat-2)', 'var(--you)'];
+    const bits = Array.from({ length: 12 }, (_, i) => {
+      const a = (i / 12) * Math.PI * 2;
+      return h('i', {
+        style: `background:${colours[i % 4]};--x:${Math.round(Math.cos(a) * 110)}px;--y:${Math.round(Math.sin(a) * 42)}px;animation-delay:${(i % 3) * 70}ms`,
+      });
+    });
+    return h('div', { class: 'burst', 'aria-hidden': 'true' }, bits, h('div', { class: 'core' }, glyph));
+  }
+
+  /** `justFound`: checked off just now, so it lands with a burst. */
+  function renderLandmark(l, fromHex = null, justFound = false) {
     const kind = kindOf(l);
     const secret = isSecret(l);
     const finds = l.finds === 1 ? 'Found by 1 explorer' : `Found by ${l.finds.toLocaleString()} explorers`;
@@ -2023,29 +2067,53 @@
     const done = fromHex && (landmarksByCell.get(fromHex) || []).length > 1
       ? h('button', { class: 'btn', onclick: () => renderHex(fromHex) }, 'Back to this hex')
       : h('button', { class: 'btn', 'data-close': true }, secret ? 'OK' : 'Done');
-    if (secret) {
-      // What it is stays a surprise until you get there, but how explorers rated it doesn't.
+    if (l.teaser) {
+      // Signed out: we only know where it is and how it's rated.
       fill($('landmarkBody'), h('div', { class: 'stack' },
-        sheetHead('A landmark'),
+        sheetHead(l.welcome ? 'A welcome from a neighbour' : 'A landmark'),
         h('div', { class: 'blocked' },
           h('div', { class: 'hex-badge quiet', 'aria-hidden': 'true' }, '?'),
           h('span', { class: 'card-title' }, 'Something is here'),
-          h('span', { class: 'body' }, 'Another explorer left a landmark on this hex. Walk through it to find out what it is.'),
+          h('span', { class: 'body' }, l.welcome
+            ? 'A neighbour left this for people new to the area. Sign in, then walk through this hex to find out what it is.'
+            : 'Another explorer left a landmark on this hex. Sign in, then walk through it to find out what it is.'),
+          votes ? h('span', { class: 'sublabel' }, votes) : null),
+        h('button', { class: 'btn', onclick: openSignIn }, 'Sign in'),
+        h('button', { class: 'btn ghost', 'data-close': true }, 'Not now')));
+      return;
+    }
+    if (secret) {
+      // What it is stays a surprise until you get there, but how explorers rated it doesn't.
+      fill($('landmarkBody'), h('div', { class: 'stack' },
+        sheetHead(l.welcome ? 'A welcome from a neighbour' : 'A landmark'),
+        h('div', { class: 'blocked' },
+          h('div', { class: 'hex-badge quiet', 'aria-hidden': 'true' }, '?'),
+          h('span', { class: 'card-title' }, 'Something is here'),
+          h('span', { class: 'body' }, l.welcome
+            ? 'A neighbour left this for people new to the area. Walk through this hex to find out what it is.'
+            : 'Another explorer left a landmark on this hex. Walk through it to find out what it is.'),
           h('span', { class: 'sublabel' }, [l.finds ? finds : 'Nobody has found it yet', votes || (l.finds ? 'no votes yet' : null)]
             .filter(Boolean).join(' · '))),
         done));
       return;
     }
+    const welcome = l.welcome && !l.mine;
+    const firstsLine = justFound && firstsCache ? `${core.firstsDone(firstsCache)} of ${core.FIRSTS.length} firsts` : null;
     fill($('landmarkBody'), h('div', { class: 'stack' },
       sheetHead(l.mine ? 'Your landmark' : 'Landmark found'),
+      justFound ? burst(kind.icon) : null,
       h('div', { class: 'landmark-card' },
-        h('span', { class: 'emoji', 'aria-hidden': 'true' }, kind.icon),
+        welcome ? h('span', { class: 'kicker' }, 'A welcome from a neighbour') : null,
+        justFound ? null : h('span', { class: 'emoji', 'aria-hidden': 'true' }, kind.icon),
         h('span', { class: 'card-title', dir: 'auto' }, l.title),
         h('span', { class: 'me-sub' }, [kind.label, l.mine ? 'left by you' : `left by ${l.author || 'an explorer'}`,
           core.timeAgo(Date.parse(l.created_at))].join(' · ')),
         l.note ? h('p', { class: 'note', dir: 'auto' }, l.note) : null,
-        h('span', { class: 'fine' }, [l.finds ? finds : 'Nobody has found it yet', votes,
-          l.mine && l.points != null ? `earned you ${fmtPts(l.points)} pts` : null].filter(Boolean).join(' · '))),
+        justFound
+          ? h('span', { class: 'fine' }, [`+${core.LANDMARK_POINTS.found} pts`, firstsLine,
+            `${core.ordinal(l.finds)} to find it`, votes].filter(Boolean).join(' · '))
+          : h('span', { class: 'fine' }, [l.finds ? finds : 'Nobody has found it yet', votes,
+            l.mine && l.points != null ? `earned you ${fmtPts(l.points)} pts` : null].filter(Boolean).join(' · '))),
       l.mine && l.buried
         ? h('div', { class: 'panel tint sm' }, h('span', { class: 'body' },
           'Hidden: explorers who found it voted it down, so nobody else sees it or gets told about it.'))
@@ -2083,7 +2151,8 @@
       onclick: () => vote(v),
     }, h('span', { class: 'emoji', 'aria-hidden': 'true' }, icon), h('b', {}, label));
     return h('div', { class: 'stack tight' },
-      h('span', { class: 'sublabel' }, l.my_vote ? 'Your vote · tap to change it' : 'Worth the stop? Your vote helps other explorers'),
+      h('span', { class: 'sublabel' }, l.my_vote ? 'Your vote · tap to change it'
+        : l.welcome ? 'Worth the stop? Your vote helps the next newcomer' : 'Worth the stop? Your vote helps other explorers'),
       h('div', { class: 'kinds', role: 'radiogroup', 'aria-label': 'Vote' },
         btn(1, '👍', 'Yes'), btn(-1, '👎', 'Not really')));
   }
@@ -2108,9 +2177,11 @@
   // ---------- leave a landmark ----------
 
   let landmarkKind = null;
+  let landmarkWelcome = true;
 
   $('btnLandmark').addEventListener('click', () => {
     landmarkKind = null;
+    landmarkWelcome = true;
     renderLeaveLandmark();
     S.openSheet('landmarkSheet');
   });
@@ -2155,6 +2226,20 @@
     const title = h('input', { class: 'input note', placeholder: 'Name it, e.g. "Rooftop view of the Nile"', maxlength: '60', dir: 'auto', 'aria-label': 'Title' });
     const note = h('textarea', { class: 'input', placeholder: 'What should people look for? (optional)', maxlength: '280', dir: 'auto', 'aria-label': 'Note' });
     const submit = h('button', { class: 'btn', type: 'submit', disabled: true }, 'Leave landmark');
+    const districtName = (() => {
+      const a = Areas ? Areas.of(cell) : null;
+      return a && a.district ? (Areas.info(a.district) || {}).name : null;
+    })();
+    // A welcome: newcomers to the area are pointed to it as their first landmark to find.
+    const welcome = h('button', {
+      type: 'button', class: 'toggle-row', role: 'switch', 'aria-checked': String(landmarkWelcome),
+      onclick: () => {
+        landmarkWelcome = !landmarkWelcome;
+        welcome.setAttribute('aria-checked', String(landmarkWelcome));
+      },
+    }, h('span', {}, 'Point newcomers here',
+      h('small', {}, `New explorers in ${districtName || 'the area'} get it as a welcome`)),
+    h('span', { class: 'switch' }, h('span')));
     const kindGrid = h('div', { class: 'kinds', role: 'radiogroup', 'aria-label': 'Kind of landmark' });
     const valid = () => !!landmarkKind && !!title.value.trim();
     const draw = () => {
@@ -2187,9 +2272,12 @@
             submit.disabled = true;
             try {
               check(await sb.from('landmarks')
-                .insert({ cell, kind: landmarkKind, title: title.value.trim(), note: note.value.trim() || null }));
-              toast(`${core.LANDMARK_KINDS[landmarkKind].icon} Landmark left · +${core.LANDMARK_POINTS.left} pts · explorers passing by will be told`, 4000);
+                .insert({ cell, kind: landmarkKind, title: title.value.trim(), note: note.value.trim() || null, welcome: landmarkWelcome }));
+              toast(`${core.LANDMARK_KINDS[landmarkKind].icon} Landmark left · +${core.LANDMARK_POINTS.left} pts · ${landmarkWelcome
+                ? 'newcomers will be pointed to it' : 'explorers passing by will be told'}`, 4000);
+              if (firstsCache) firstsCache.left = true;
               landmarkKind = null;
+              landmarkWelcome = true;
               reloadLandmarks();
               renderLeaveLandmark();
             } catch (err) {
@@ -2197,10 +2285,9 @@
               submit.disabled = !valid();
             }
           },
-        }, kindGrid, title, note, submit);
+        }, kindGrid, title, note, welcome, submit);
 
-    const area = Areas ? Areas.of(cell) : null;
-    const district = area && area.district ? (Areas.info(area.district) || {}).name : null;
+    const district = districtName;
     fill($(body), h('div', { class: 'stack' },
       h('div', { class: 'stack tight', style: 'gap:2px' },
         h('div', { class: 'sheet-head' },
@@ -2248,6 +2335,262 @@
         },
       }, h('span', {}, 'Notify me about landmarks with the screen off'), h('span', { class: 'row-val accent' }, 'Allow'), h('span', { class: 'chev' }, '›')));
   }
+
+  // ---------- belonging: arriving in a neighbourhood ----------
+  //
+  // Where you are (worked out on the phone from Scoop's districts, or areas
+  // already looked up), and a pulse of that neighbourhood from the server:
+  // how many explorers keep it warm, where landmarks are, which explorer you'd
+  // be. The pulse works signed out too: it sends only the district id and the
+  // ~5 km² blocks around you, and never while you're inside a privacy zone.
+  const HOOD_KEY = 'scoop.hood.v1';
+  const PULSE_REFRESH_MS = 15 * 60000;
+  const PULSE_RETRY_MS = 60000;
+  /** @type {{id:string|null,name:string|null}} the district you were last in */
+  let hood = loadJSON(HOOD_KEY, { id: null, name: null });
+  let pulseBlock = null;
+  let pulseAt = 0;
+  let pulseLoading = null;
+
+  function districtOf(latlng) {
+    if (!Areas || !latlng) return null;
+    const a = Areas.of(h3.latLngToCell(latlng.lat, latlng.lng, S.BASE_RES));
+    if (!a || !a.district) return null;
+    const info = Areas.info(a.district);
+    return info && info.name ? { id: a.district, name: info.name } : null;
+  }
+
+  /** Your home district when signed in, else where you are (or were last). */
+  function hoodName() {
+    const home = homes.find((a) => a.kind === 'district');
+    return (firstsCache && firstsCache.homeName) || (home && home.name) || hood.name || null;
+  }
+
+  /** Landmarks you could go and find, with how far each is from you. */
+  function openMarks() {
+    const pos = S.position();
+    const all = [...landmarksByCell.values()].flat();
+    const dist = (l) => {
+      if (!pos) return NaN;
+      const [lat, lng] = h3.cellToLatLng(l.cell);
+      return distance(pos.latlng, { lat, lng });
+    };
+    return { all, dist };
+  }
+
+  function nearbyCount() {
+    const { all, dist } = openMarks();
+    return all.filter((l) => !l.mine && dist(l) <= core.NEAR_METERS).length;
+  }
+
+  function updateHood() {
+    const name = hood.name;
+    $('walkSub').textContent = name ? `warms ${name}` : '';
+    const row = $('hoodRow');
+    row.hidden = !name;
+    if (name) {
+      $('hoodName').textContent = `You're in ${name}`;
+      const n = pulse && pulse.district === hood.id ? Number(pulse.explorers) || 0 : null;
+      const near = nearbyCount();
+      $('hoodSub').textContent = [
+        n === null ? null : n ? `${n.toLocaleString()} explorer${n === 1 ? '' : 's'} keep it warm` : 'Be the first explorer here',
+        near ? `${near} landmark${near === 1 ? '' : 's'} within 5 min` : null,
+      ].filter(Boolean).join(' · ') || 'Your first walk starts here';
+    }
+    $('mapHint').hidden = !nearbyCount();
+  }
+
+  /** Fetch the pulse for where you are. `force` skips the "fetched lately" check. */
+  async function loadPulse(latlng, force = false) {
+    if (!latlng) return pulse;
+    const cell = h3.latLngToCell(latlng.lat, latlng.lng, S.BASE_RES);
+    if (isHidden(cell)) return pulse; // never look anything up from inside a privacy zone
+    if (Areas) await Areas.ready;
+    const here = districtOf(latlng);
+    if (here && (here.id !== hood.id || here.name !== hood.name)) {
+      hood = here;
+      saveJSON(HOOD_KEY, hood);
+    }
+    const block = h3.latLngToCell(latlng.lat, latlng.lng, LANDMARK_BLOCK_RES);
+    const fresh = block === pulseBlock && Date.now() - pulseAt < PULSE_REFRESH_MS;
+    if (pulseLoading) return pulseLoading;
+    if (fresh && !force) {
+      updateHood();
+      return pulse;
+    }
+    pulseLoading = (async () => {
+      try {
+        const district = here ? here.id : null;
+        const [r] = check(await sb.rpc('area_pulse', { district, blocks: h3.gridDisk(block, 1) }));
+        pulse = { district, ...r, pins: Array.isArray(r.pins) ? r.pins : [] };
+        pulseBlock = block;
+        pulseAt = Date.now();
+        if (!profile) showTeasers(pulse.pins);
+      } catch (err) {
+        // Offline: try again in a minute. The map works without it.
+        pulseAt = Date.now() - PULSE_REFRESH_MS + PULSE_RETRY_MS;
+      } finally {
+        pulseLoading = null;
+        updateHood();
+      }
+      return pulse;
+    })();
+    return pulseLoading;
+  }
+
+  document.addEventListener('scoop:fix', (e) => loadPulse(e.detail.latlng));
+  updateHood();
+
+  // ---------- belonging: your first week (neighbourhood firsts) ----------
+
+  /** Work out the firsts: on this phone, plus your account when signed in. */
+  async function loadFirsts() {
+    const s = { walked: S.walks.length > 0 || S.visited.size > 0, home: null, homeName: null,
+      found: false, met: false, coffee: false, left: false };
+    if (profile) {
+      try {
+        const [r] = check(await sb.rpc('my_firsts'));
+        Object.assign(s, {
+          walked: s.walked || r.walked, home: r.home || null, homeName: r.home_name || null,
+          found: r.found, met: r.met, coffee: r.coffee, left: r.left_one,
+        });
+      } catch (err) {
+        if (firstsCache && firstsCache.signedIn) return firstsCache; // offline: keep what we knew
+      }
+    }
+    s.signedIn = !!profile;
+    firstsCache = s;
+    return s;
+  }
+
+  function goSignIn() {
+    S.closeSheet();
+    openSignIn();
+  }
+
+  /** Close the sheet and show the landmark a newcomer should go and find. */
+  function showWelcome(pick) {
+    S.closeSheet();
+    const ll = h3.cellToLatLng(pick.l.cell);
+    map.setView(ll, Math.max(map.getZoom(), 17));
+    openHex(pick.l.cell);
+  }
+
+  function firstItems(s, name) {
+    const where = name || 'your neighbourhood';
+    const { all, dist } = openMarks();
+    const pick = core.pickWelcome(all, dist);
+    const cafes = pulse && pulse.district === hood.id ? Number(pulse.cafes) || 0 : 0;
+    return {
+      walked: { t: 'Take your first walk', m: 'Tap Start walk and head out', act: () => S.closeSheet() },
+      home: {
+        t: `Make ${where} home`,
+        m: profile ? 'Keep walking here and it becomes your home district' : 'Sign in and it becomes your home district',
+        act: profile ? () => S.closeSheet() : goSignIn,
+      },
+      found: {
+        t: 'Find a neighbour’s landmark',
+        m: pick
+          ? [`Nearest is ${core.walkDistance(pick.m)} away`, pick.l.ups ? `👍 ${pick.l.ups}` : null].filter(Boolean).join(' · ')
+          : 'Walk past a ? on the map',
+        act: pick ? () => showWelcome(pick) : () => S.closeSheet(),
+      },
+      met: {
+        t: 'Walk with someone',
+        m: 'Meet a friend on a hex you walked and check in together',
+        act: profile ? () => { S.closeSheet(); $('btnSocial').click(); } : goSignIn,
+      },
+      coffee: {
+        t: 'Check in for coffee',
+        m: cafes ? `${cafes} café${cafes === 1 ? '' : 's'} on hexes walked in ${where}` : 'Check in with ☕ on a hex you walked',
+        act: profile ? () => { S.closeSheet(); $('btnCheckin').click(); } : goSignIn,
+      },
+      left: {
+        t: 'Leave a welcome for the next newcomer',
+        m: 'A landmark on any hex',
+        act: profile ? () => { S.closeSheet(); $('btnLandmark').click(); } : goSignIn,
+      },
+    };
+  }
+
+  async function openFirsts() {
+    S.openSheet('firstsSheet');
+    if (!firstsCache) fill($('firstsBody'), h('span', { class: 'fine' }, 'Loading…'));
+    else renderFirsts(firstsCache);
+    const pos = S.position();
+    await Promise.all([loadFirsts(), pos ? loadPulse(pos.latlng) : null]);
+    if (S.currentSheet() === 'firstsSheet') renderFirsts(firstsCache);
+  }
+
+  function renderFirsts(s) {
+    const name = hoodName();
+    const done = core.firstsDone(s);
+    const next = core.nextFirst(s);
+    const items = firstItems(s, name);
+    const p = pulse && pulse.district === hood.id ? pulse : null;
+    const stats = p ? [
+      `${Number(p.explorers).toLocaleString()} explorer${Number(p.explorers) === 1 ? '' : 's'}`,
+      `${Number(p.landmarks).toLocaleString()} landmark${Number(p.landmarks) === 1 ? '' : 's'}`,
+      Number(p.cafes) ? `${p.cafes} café${Number(p.cafes) === 1 ? '' : 's'}` : null,
+    ].filter(Boolean).join(' · ') : null;
+    fill($('firstsBody'), h('div', { class: 'stack' },
+      h('div', { class: 'sheet-head' },
+        h('div', { class: 'hood-head' },
+          h('span', { class: 'hood-hex', 'aria-hidden': 'true' }),
+          h('div', {},
+            h('span', { class: 'title', dir: 'auto' }, next ? `Your first week in ${name || 'the neighbourhood'}` : `You're a ${name || 'neighbourhood'} local`),
+            stats ? h('span', { class: 'sub' }, stats) : null)),
+        h('button', { class: 'icon-btn sm', 'data-close': true, 'aria-label': 'Close' }, '✕')),
+      h('div', { class: 'firsts-progress' },
+        h('div', { class: 'top' }, h('b', {}, `${done} of ${core.FIRSTS.length} neighbourhood firsts`), h('span', {}, next ? 'Become a local' : 'Local ✓')),
+        h('div', { class: 'progress-steps', 'aria-hidden': 'true' }, core.FIRSTS.map((k) => h('span', { class: s[k] ? 'on' : '' })))),
+      h('div', { class: 'firsts' }, core.FIRSTS.map((k) => {
+        const it = items[k];
+        if (s[k]) {
+          return h('div', { class: 'first done', 'aria-label': `${it.t}: done` }, h('span', { class: 'mark', 'aria-hidden': 'true' }, '✓'),
+            h('div', {}, h('b', { dir: 'auto' }, it.t)));
+        }
+        const isNext = k === next;
+        return h('button', { type: 'button', class: isNext ? 'first next' : 'first', onclick: it.act },
+          h('span', { class: 'mark', 'aria-hidden': 'true' }, isNext ? '?' : h('i')),
+          h('div', {}, h('b', { dir: 'auto' }, it.t), h('small', { dir: 'auto' }, it.m)),
+          isNext ? h('span', { class: 'go' }, 'Go ›') : null);
+      })),
+      h('span', { class: 'fine' }, 'No deadline. Firsts stay open as long as you like.')));
+  }
+
+  /** In Me, until you're a local. */
+  document.addEventListener('scoop:me-open', async () => {
+    const s = await loadFirsts();
+    const name = hoodName();
+    const next = core.nextFirst(s);
+    fill($('meFirsts'), next ? h('div', { class: 'list-card' },
+      h('button', { class: 'list-row', onclick: openFirsts },
+        h('span', { dir: 'auto' }, `Your first week in ${name || 'the neighbourhood'}`),
+        h('span', { class: 'row-val accent' }, `${core.firstsDone(s)} of ${core.FIRSTS.length} firsts`),
+        h('span', { class: 'chev' }, '›'))) : null);
+  });
+
+  // The first walk saved: a welcome to the neighbourhood, and where to go next.
+  document.addEventListener('scoop:summary', async (e) => {
+    if (!e.detail.first) return;
+    const done = $('summaryDone');
+    if (done) done.replaceWith(h('button', { class: 'btn', id: 'summaryDone', onclick: openFirsts }, 'Meet your neighbourhood'));
+    const pos = S.position();
+    if (pos) await loadPulse(pos.latlng, true);
+    const box = $('summaryExtra');
+    if (!box || !hood.name || S.currentSheet() !== 'summarySheet') return;
+    const p = pulse && pulse.district === hood.id ? pulse : null;
+    const near = nearbyCount();
+    fill(box, h('div', { class: 'welcome-card' },
+      h('span', { class: 'title', dir: 'auto' }, `Welcome to ${hood.name}`),
+      p ? h('span', { class: 'sub' }, `You're its ${core.ordinal(Number(p.ordinal) || 1)} explorer.`) : null,
+      near ? h('div', { class: 'welcome-pins' },
+        h('span', { class: 'q', 'aria-hidden': 'true' }, Array.from({ length: Math.min(3, near) }, () => h('span', {}, '?'))),
+        h('span', {}, near === 1
+          ? 'A neighbour left a landmark within 5 minutes of here.'
+          : `${near} neighbours left landmarks within 5 minutes of here.`)) : null));
+  });
 
   // ---------- boot ----------
 

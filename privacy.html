@@ -19,11 +19,20 @@
 <body>
 <main>
   <h1>Scoop privacy</h1>
-  <p class="muted">Last updated 31 October 2026</p>
+  <p class="muted">Last updated 17 November 2026</p>
 
   <h2>Without an account</h2>
-  <p>Scoop keeps your explored hexes, walks and settings on your device only. Nothing is sent anywhere except
-    map tile requests to the map provider you choose (OpenStreetMap or Esri).</p>
+  <p>Scoop keeps your explored hexes, walks and settings on your device only. Your location and routes are never
+    sent anywhere. Scoop makes two kinds of requests:</p>
+  <ul>
+    <li>Map tiles from the map provider you choose (OpenStreetMap or Esri).</li>
+    <li>Neighbourhood totals, to welcome you to the area: how many explorers walk your district, and where other
+      explorers left landmarks nearby. To get them, Scoop sends Scoop's server only the id of the district you're
+      in and the ids of the blocks of about 5 km² around you. It sends no account, device id or location, and
+      Scoop's database doesn't save the request (like any web request, it passes through our hosting provider,
+      Supabase, which keeps short-lived access logs). Scoop never makes this request while you're inside one of
+      your privacy zones.</li>
+  </ul>
 
   <h2>Walk reminders (Android app)</h2>
   <p>If you turn on <em>Remind me to start a walk</em>, Scoop asks Android's activity detection (Google Play
@@ -43,7 +52,8 @@
     <li>Walk totals: start and end time, distance and the number of new hexes. <strong>Your GPS tracks are never uploaded.</strong></li>
     <li>Check-ins you make (the hex, the kind, an optional note and an optional photo, re-encoded so it carries
       no location data), kudos, friend requests, challenges and badges.</li>
-    <li>Landmarks you leave (the hex, the kind, a title and an optional note), and which landmarks you found and
+    <li>Landmarks you leave (the hex, the kind, a title, an optional note, and whether newcomers should be pointed
+      to it), and which landmarks you found and
       when, plus your thumbs up or down on it. Finding one only tells the server you passed that hex; nobody else
       sees who found or voted on a landmark, the author only sees how many explorers did and the vote totals.</li>
   </ul>
@@ -53,7 +63,9 @@
     <li>Your friends can see your profile, which hexes you explored and how often (not when), your walks,
       check-ins, badges, scores and home district. Friendships last a month unless you both renew.</li>
     <li>Every signed-in explorer can see your landmarks (where they are, the title and note), but only your
-      friends see that you left them; to everyone else they're from an anonymous explorer.</li>
+      friends see that you left them; to everyone else they're from an anonymous explorer. People who haven't
+      signed in only see which hex a landmark is on and its thumbs-up count, never what it is or who left it.</li>
+    <li>Anyone can see how many explorers walked a district in the last 60 days, never who they are.</li>
     <li>Everyone else only sees an anonymous row with your score and rank on the leaderboards of the district,
       city and country you explored in, and on the leaderboard of everyone.</li>
     <li>Hexes inside your <em>privacy zones</em> (set in the menu, stored only on your device) are never uploaded,

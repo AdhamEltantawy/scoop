@@ -333,3 +333,37 @@ test('landmark points match the server', () => {
   // landmark_reward() in supabase/migrations/20261108000000_landmark_points_votes.sql
   assert.deepEqual(core.LANDMARK_POINTS, { left: 3, found: 2, wasFound: 1, upvoted: 1 });
 });
+
+test('neighbourhood firsts: counted and taken in order', () => {
+  assert.equal(core.FIRSTS.length, 6);
+  assert.equal(core.firstsDone(null), 0);
+  assert.equal(core.nextFirst(null), 'walked');
+  const s = { walked: true, home: 'r10', found: false, met: false, coffee: true, left: false };
+  assert.equal(core.firstsDone(s), 3);
+  assert.equal(core.nextFirst(s), 'found');
+  assert.equal(core.nextFirst(Object.fromEntries(core.FIRSTS.map((k) => [k, true]))), null);
+});
+
+test('a newcomer is pointed to a nearby welcome first, then the nearest landmark', () => {
+  const dist = (l) => l.m;
+  const marks = [
+    { id: 1, m: 120, ups: 3 },
+    { id: 2, m: 300, ups: 22, welcome: true },
+    { id: 3, m: 90, mine: true, welcome: true },
+    { id: 4, m: 80, found_by_me: true, welcome: true },
+    { id: 5, m: 2500, welcome: true },
+  ];
+  assert.equal(core.pickWelcome(marks, dist).l.id, 2, 'the welcome nearby, even if another is nearer');
+  assert.equal(core.pickWelcome(marks.filter((l) => l.id !== 2), dist).l.id, 1, 'too far for a welcome: the nearest');
+  assert.equal(core.pickWelcome([{ id: 6, m: 100, ups: 1 }, { id: 7, m: 100, ups: 9 }], dist).l.id, 7, 'equally near: better rated');
+  assert.equal(core.pickWelcome([{ id: 8, m: 50, mine: true }], dist), null, 'never your own');
+  assert.equal(core.pickWelcome([{ id: 9, m: NaN }], dist), null, 'nowhere to measure from');
+  assert.equal(core.pickWelcome(undefined, dist), null);
+});
+
+test('walking distances read like you would say them', () => {
+  assert.equal(core.walkDistance(12), '50 m');
+  assert.equal(core.walkDistance(287), '300 m');
+  assert.equal(core.walkDistance(1240), '1.2 km');
+  assert.equal(core.walkDistance(12400), '12 km');
+});

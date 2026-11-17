@@ -1,4 +1,12 @@
-/* Scoop · Ember & Nile — design tokens. Light is default outdoors; dark follows system. */
+/* Scoop · 2c "Warmth is the brand" — design tokens. Light is default outdoors; dark follows system.
+ *
+ * Colour roles:
+ *   Ember (--accent)  shared warmth and the main action: Start walk, primary buttons, recording.
+ *   Blue  (--you)     you and your choices: your dot, your row, selected options, switches, your points.
+ *   Pine  (--friend)  friends and circles.
+ *   Ink   (--ink)     alerts and secondary actions; your own reactions.
+ *   Heat  (--heat-*)  the map's heat scale only.
+ */
 :root {
   /* Chrome */
   --bg: #F5F0E8;
@@ -8,16 +16,24 @@
   --ink: #1E1A16;
   --muted: #6E655B;
   --line: #E6DDD0;
-  --accent: #0B7A62;            /* Nile green: every primary action, "you" */
+
+  /* Roles */
+  --accent: #D23F1C;            /* ember: the main action, shared warmth */
+  --accent-strong: #C83B1B;     /* filled ember cards (welcome, together) */
+  --accent-ink: #B5361A;        /* ember text and links on light surfaces */
   --on-accent: #FFFFFF;
-  --tint: #0B7A621A;            /* accent @ 10%: selected rows, "you" highlight */
-  --friend: #3355E0;
+  --tint: #FCEDE6;              /* ember wash: the highlighted next step */
+  --you: #2B62E8;               /* you and your choices */
+  --on-you: #FFFFFF;
+  --you-tint: #E8EFFD;
+  --friend: #12805C;            /* pine: friends and circles */
+  --friend-tint: #E4F2EB;
   --stranger: var(--muted);
-  --success: #0B7A62;
+  --success: #12805C;
   --warning: #9A6414;
   --warning-bg: #FFF6E6;
-  --danger: #C6352B;
-  --danger-tint: #C6352B1A;
+  --danger: #A8232B;
+  --danger-tint: #A8232B1A;
   --scrim: rgba(20,17,14,.32);
 
   /* Map — heat (fill / stroke / fill-opacity), band 0 = just walked */
@@ -29,13 +45,12 @@
   --heat-stroke-width: 1.3;
 
   /* Map — other layers */
-  --walk: #19C29A; --walk-stroke: #053F33; --walk-opacity: .8; --walk-stroke-width: 2.4;
-  --friend-overlay: #3355E0; --friend-overlay-opacity: .14; --friend-overlay-stroke-width: 2.4;
-  --community: #8A4FC7;
+  --walk: #DD4420; --walk-stroke: #2B62E8; --walk-opacity: .85; --walk-stroke-width: 2.4; /* this walk: ember, outlined as yours */
+  --friend-overlay: #12805C; --friend-overlay-opacity: .14; --friend-overlay-stroke-width: 2.4;
+  --community: #EC6C34;         /* everyone's warmth, under your own hexes */
   --privacy: #5C6470; --privacy-stroke: #3A4048; --privacy-opacity: .12; /* dash 6 5 */
   --grid: #1A1A1A; --grid-opacity: .28; --grid-width: .8;   /* on satellite: #FFFFFF @ .35 */
-  --location: #1E1A16;          /* dot r8 + 3px white ring; accuracy @ .10 fill */
-
+  --location: #2B62E8;          /* you: dot r8 + 3px white ring; accuracy @ .16 fill */
   /* Type */
   --font-display: 'Bricolage Grotesque', system-ui, sans-serif;  /* numbers, titles, buttons */
   --font-body: 'Instrument Sans', 'IBM Plex Sans Arabic', system-ui, sans-serif;
@@ -55,8 +70,11 @@
   :root {
     --bg: #14110E; --surface: #1F1B17; --surface-2: #2A251F; --chrome: #1F1B17EB;
     --ink: #F3EDE4; --muted: #A89E92; --line: #3A332B;
-    --accent: #2FBF98; --on-accent: #08120F; --tint: #2FBF9826;
-    --friend: #7D96FF; --danger: #FF6B5E; --danger-tint: #FF6B5E26;
+    --accent: #FF6F47; --accent-strong: #E0522C; --accent-ink: #FF8E6B; --on-accent: #1A0D08; --tint: #FF6F4726;
+    --you: #7C9CFF; --on-you: #0A1230; --you-tint: #7C9CFF26;
+    --friend: #4CC79A; --friend-tint: #4CC79A26; --success: #4CC79A;
+    --danger: #FF7A86; --danger-tint: #FF7A8626;
     --warning: #F2B85A; --warning-bg: #2E2516;
+    --walk-stroke: #7C9CFF; --location: #7C9CFF; --friend-overlay: #4CC79A;
   }
 }

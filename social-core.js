@@ -473,6 +473,46 @@
     return `${n}${suffix}`;
   }
 
+  // ---------- belonging: neighbourhood firsts ----------
+
+  /** The six firsts a newcomer works through, in order. Keep in sync with my_firsts(). */
+  const FIRSTS = ['walked', 'home', 'found', 'met', 'coffee', 'left'];
+
+  /** How many firsts are done. `state` maps each key in FIRSTS to true when done. */
+  function firstsDone(state) {
+    return FIRSTS.filter((k) => state && state[k]).length;
+  }
+
+  /** The first one not done yet, or null when you're a local. */
+  function nextFirst(state) {
+    return FIRSTS.find((k) => !(state && state[k])) || null;
+  }
+
+  /** About five minutes on foot. */
+  const NEAR_METERS = 400;
+
+  /**
+   * The landmark to point a newcomer to: someone else's that you haven't found.
+   * A welcome (left for newcomers) within `welcomeReach` metres wins over the
+   * rest; then the nearest, and the better rated of two equally near.
+   * `dist(l)` is how far away it is in metres. Returns { l, m } or null.
+   */
+  function pickWelcome(marks, dist, welcomeReach = 2000) {
+    const open = (marks || []).filter((l) => !l.mine && !l.found_by_me)
+      .map((l) => ({ l, m: dist(l) }))
+      .filter((x) => Number.isFinite(x.m));
+    const near = (a, b) => a.m - b.m || (b.l.ups || 0) - (a.l.ups || 0);
+    const welcomes = open.filter((x) => x.l.welcome && x.m <= welcomeReach).sort(near);
+    if (welcomes.length) return welcomes[0];
+    return open.sort(near)[0] || null;
+  }
+
+  /** "300 m", "1.2 km": rounded, as you'd say it. */
+  function walkDistance(m) {
+    if (m < 1000) return `${Math.max(50, Math.round(m / 50) * 50)} m`;
+    return `${(m / 1000).toFixed(m < 10000 ? 1 : 0)} km`;
+  }
+
   /** Pull an invite code out of a pasted link or code. */
   function parseInvite(text) {
     const m = String(text || '').match(/(?:invite=)?([0-9a-f]{8})\b/i);
@@ -485,5 +525,6 @@
     pickAreas, simplifyLine, inWays, waysBox, parseDistricts, districtAt, periodStart, trendBuckets,
     streaks, localBadges, compare, zoneFilter, cellSig, syncDelta, readyToUpload, mergeRemote, topPercent, chunk, validUsername, timeAgo, parseInvite,
     landmarksToAlert, landmarkRating, pruneAlerted, ordinal,
+    FIRSTS, NEAR_METERS, firstsDone, nextFirst, pickWelcome, walkDistance,
   };
 });
