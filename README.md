@@ -94,8 +94,12 @@ Sign in with an emailed code to make Scoop social:
   (Greater Cairo and Giza so far). Hexes in those upload straight away, and the
   server fills in their country and city (learned from tagged hexes in the
   same district, or else in the same governorate). Elsewhere a hex waits for its OSM
-  lookup, for up to 3 days. Your home district, city and country are
-  where you score the most.
+  lookup, for up to 3 days. Your home district is one you choose from the
+  districts you've walked ("Make it home", a neighbourhood first; change it
+  from Me). Until you choose, it's where you score the most. It never
+  switches by itself: if another district has been warmer for you in each of
+  the last 3 weeks, the app asks once after a walk. Your home city and
+  country are the ones your home district is in.
 - **Leaderboards**: your friends, everyone in your district, city or
   country, or everyone anywhere, by current score or points earned this week
   or month. Outside the friends board only you and your friends are named;
