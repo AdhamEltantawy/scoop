@@ -118,6 +118,14 @@
     <button class="icon-btn sm" id="btnCircleBannerClose" aria-label="Not now">✕</button>
   </div>
 
+  <!-- Picking a circle's meeting point: a pin at the middle of the map (circles.js) -->
+  <div class="meet-pin" id="meetPin" aria-hidden="true" hidden>📍</div>
+  <div class="nudge meet-pick" id="meetPick" role="status" aria-live="polite" hidden>
+    <div class="nudge-text"><b>Move the map to where you'll meet</b><small id="meetPickSub" dir="auto"></small></div>
+    <button class="btn sm" id="btnMeetHere">Meet here</button>
+    <button class="icon-btn sm" id="btnMeetCancel" aria-label="Cancel">✕</button>
+  </div>
+
   <div class="map-hint" id="mapHint" hidden>Walk past a <b aria-hidden="true">?</b> to see what a neighbour left</div>
 
   <nav class="bottom-row" aria-label="Main">

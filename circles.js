@@ -271,6 +271,88 @@
     return known();
   }
 
+  /**
+   * Pick a meeting point on the map. The sheet steps aside and a pin sits at
+   * the middle of the map: move the map until it's on the spot and tap Meet
+   * here. The hex under the pin is outlined, with the district it's in (which
+   * is the circle's district). Resolves the hex, or null if cancelled.
+   */
+  function pickOnMap(start) {
+    const { map } = S;
+    const css = getComputedStyle(document.documentElement);
+    const ON = css.getPropertyValue('--you').trim() || '#2B62E8';
+    const OFF = S.COLORS.privacyStroke;
+    const pin = $('meetPin');
+    const bar = $('meetPick');
+    const sub = $('meetPickSub');
+    const here = $('btnMeetHere');
+    const outline = L.polygon([], { interactive: false, weight: 3, dashArray: '6 5', color: ON, fillColor: ON, fillOpacity: 0.18 }).addTo(map);
+    const centreCell = () => {
+      const c = map.getCenter();
+      return h3.latLngToCell(c.lat, c.lng, S.BASE_RES);
+    };
+    let looked = null; // the hex whose district lookup is done or under way
+    let lookedDone = false;
+
+    const draw = () => {
+      const cell = centreCell();
+      const hidden = kit.isHidden(cell);
+      outline.setLatLngs(h3.cellToBoundary(cell));
+      outline.setStyle({ color: hidden ? OFF : ON, fillColor: hidden ? OFF : ON });
+      const d = hidden ? null : kit.districtOf(latLngOf(cell));
+      here.disabled = hidden;
+      sub.textContent = hidden ? 'Inside a privacy zone · move it outside'
+        : d ? `In ${d.name}`
+          : looked === cell && lookedDone ? 'District not known yet · you can still meet here'
+            : 'Finding the district…';
+      return { cell, hidden, d };
+    };
+    const settle = () => {
+      const { cell, hidden, d } = draw();
+      if (hidden || d || looked === cell) return;
+      looked = cell;
+      lookedDone = false;
+      meetDistrict(cell).then(() => {
+        if (looked !== cell) return;
+        lookedDone = true;
+        if (!bar.hidden) draw();
+      });
+    };
+
+    return new Promise((resolve) => {
+      const finish = (cell) => {
+        map.off('move', draw);
+        map.off('moveend', settle);
+        outline.remove();
+        pin.hidden = true;
+        bar.hidden = true;
+        here.onclick = null;
+        $('btnMeetCancel').onclick = null;
+        document.body.classList.remove('picking-meet');
+        S.onBack(null);
+        resolve(cell);
+      };
+      here.onclick = () => {
+        const cell = centreCell();
+        if (kit.isHidden(cell)) return toast("That's inside a privacy zone · pick a spot outside it");
+        finish(cell);
+      };
+      $('btnMeetCancel').onclick = () => finish(null);
+      S.onBack(() => finish(null));
+
+      S.stopFollowing();
+      S.closeSheet();
+      document.body.classList.add('picking-meet');
+      pin.hidden = false;
+      bar.hidden = false;
+      map.on('move', draw);
+      map.on('moveend', settle);
+      const at = start ? h3.cellToLatLng(start) : map.getCenter();
+      map.setView(at, Math.max(map.getZoom(), 16), { animate: false });
+      settle();
+    });
+  }
+
   function renderSetup(editing, state = null) {
     const f = state || (editing ? {
       name: editing.name, weekday: editing.weekday, at: editing.at_time, cell: editing.meet_cell, from: 'circle',
@@ -287,15 +369,26 @@
     const chip = (label, on, pick, aria) => h('button', { type: 'button', class: 'chip', 'aria-pressed': String(on), 'aria-label': aria || label, onclick: pick }, label);
     const hidden = f.cell && kit.isHidden(f.cell);
     const meetHood = f.cell && !hidden ? kit.districtOf(latLngOf(f.cell)) : null;
+    // A new meeting point. A spot name that was only the old district's name
+    // follows the point to its new district.
+    const setPoint = (cell, from) => {
+      const before = f.cell ? kit.districtOf(latLngOf(f.cell)) : null;
+      f.cell = cell;
+      f.from = from;
+      const d = kit.districtOf(latLngOf(cell));
+      if (d && (!f.label || (before && f.label === before.name))) f.label = d.name;
+    };
     const useHere = () => {
       const cell = kit.hereCell();
       if (!cell) { toast('Finding you…'); S.locate(); return; }
       if (kit.isHidden(cell)) { toast("You're in a privacy zone · pick a spot outside it"); return; }
-      f.cell = cell;
-      f.from = 'here';
-      const d = kit.districtOf(latLngOf(cell));
-      if (!f.label && d) f.label = d.name;
+      setPoint(cell, 'here');
       redo();
+    };
+    const pickMap = async () => {
+      const cell = await pickOnMap(f.cell && !kit.isHidden(f.cell) ? f.cell : kit.hereCell());
+      if (cell) setPoint(cell, 'map');
+      show(redo);
     };
     const guestsRow = h('button', {
       type: 'button', class: 'toggle-row', role: 'switch', 'aria-checked': String(!!f.guests),
@@ -310,7 +403,7 @@
       f.name = nameIn.value.trim();
       f.label = labelIn.value.trim();
       if (!f.name) return toast('Give your circle a name');
-      if (!f.cell) return toast('Pick a meeting point: tap Change where you want to meet');
+      if (!f.cell) return toast('Pick a meeting point: tap Pick on map or Use where I am');
       if (kit.isHidden(f.cell)) return toast("That's inside a privacy zone · pick a spot outside it");
       saving = true;
       const args = {
@@ -350,9 +443,11 @@
       h('div', { class: 'place-row' },
         h('span', { class: 'pin', 'aria-hidden': 'true' }, '📍'),
         h('div', {},
-          h('b', {}, f.cell ? (hidden ? 'Inside a privacy zone' : 'Meeting point') : 'No meeting point yet'),
-          h('small', {}, { last: 'Where your last walk ended', here: 'Where you are now', circle: 'Where you meet now' }[f.from] || '')),
-        h('button', { type: 'button', class: 'link', onclick: useHere }, 'Use where I am')),
+          h('b', { dir: 'auto' }, f.cell ? (hidden ? 'Inside a privacy zone' : meetHood ? `Meeting point · ${meetHood.name}` : 'Meeting point') : 'No meeting point yet'),
+          h('small', {}, { last: 'Where your last walk ended', here: 'Where you are now', map: 'Where you put the pin', circle: 'Where you meet now' }[f.from] || '')),
+        h('span', { class: 'place-actions' },
+          h('button', { type: 'button', class: 'link', onclick: pickMap }, 'Pick on map'),
+          h('button', { type: 'button', class: 'link', onclick: useHere }, 'Use where I am'))),
       labelIn,
       h('div', { class: 'block' },
         h('span', { class: 'sublabel' }, 'Shared goal each week'),
