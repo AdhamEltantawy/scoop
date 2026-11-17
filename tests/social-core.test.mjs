@@ -367,3 +367,53 @@ test('walking distances read like you would say them', () => {
   assert.equal(core.walkDistance(1240), '1.2 km');
   assert.equal(core.walkDistance(12400), '12 km');
 });
+
+test('circles: schedules and who is coming read naturally', () => {
+  assert.equal(core.circleSchedule(4, '18:00'), 'Thursdays 18:00');
+  assert.equal(core.nameList([]), '');
+  assert.equal(core.nameList(['Nour']), 'Nour');
+  assert.equal(core.nameList(['Nour', 'Omar']), 'Nour and Omar');
+  assert.equal(core.nameList(['Nour', 'Omar', 'Laila']), 'Nour, Omar and Laila');
+  const people = [
+    { id: 'me', name: 'Sam', rsvp: 'in' },
+    { id: 'n', name: 'Nour', rsvp: 'in' },
+    { id: 'o', name: 'Omar', rsvp: 'omw' },
+    { id: 'b', name: 'Bea', rsvp: 'out' },
+    { id: 'g', name: 'Gus', rsvp: 'in', approved: false },
+    { id: 'c', name: 'Cy', checked_in: true },
+  ];
+  assert.deepEqual(core.whoIsIn(people, 'me'), ['Nour', 'Omar', 'Cy'], 'not you, not out, not unapproved guests');
+});
+
+test('circles: when a walk is, and when you can check in', () => {
+  const now = Date.UTC(2026, 10, 20, 15, 0);
+  const min = 60000;
+  assert.equal(core.walkWhen(now + 60 * min, now), 'in 1 hour');
+  assert.equal(core.walkWhen(now + 25 * min, now), 'in 25 min');
+  assert.equal(core.walkWhen(now + 1 * min, now), 'now');
+  assert.equal(core.walkWhen(now - 10 * min, now), 'started 10 min ago');
+  assert.equal(core.walkWhen(now - 90 * min, now), 'started 1 h ago');
+  assert.equal(core.walkWhen(now + 5 * 60 * min, now), null, 'further off: say the date instead');
+  assert.equal(core.checkInOpen(now + 31 * min, now), false);
+  assert.equal(core.checkInOpen(now + 30 * min, now), true);
+  assert.equal(core.checkInOpen(now - 120 * min, now), true);
+  assert.equal(core.checkInOpen(now - 121 * min, now), false);
+});
+
+test('circles: hexes walked together count once', () => {
+  assert.equal(core.togetherHexes({}), 0);
+  assert.equal(core.togetherHexes({ a: ['x', 'y'], b: new Set(['y', 'z']) }), 3);
+});
+
+test('circle invite codes come out of links', () => {
+  assert.equal(core.parseCircleInvite('https://example.org/scoop/?circle=7e2a9b3c'), '7E2A9B3C');
+  assert.equal(core.parseCircleInvite('7E2A9B3C'), '7E2A9B3C');
+  assert.equal(core.parseCircleInvite('nope'), null);
+});
+
+test('personal invite codes come out of links too', () => {
+  assert.equal(core.parseInvite('https://x.github.io/scoop/?invite=zam-7kq2'), 'ZAM-7KQ2');
+  assert.equal(core.parseInvite(' ZAM-7KQ2 '), 'ZAM-7KQ2');
+  assert.equal(core.parseInvite('AB12CD34'), 'AB12CD34', 'old-style codes still work');
+  assert.equal(core.parseInvite('ZAMA-7KQ2'), null);
+});

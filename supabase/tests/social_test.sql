@@ -601,6 +601,292 @@ set role authenticated;
 select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-00000000000a', false);
 delete from public.landmarks where title = 'Koshary, no sign';
 
+-- ---------- circles ----------
+-- alice starts one; bob and dave join with its code; carol asks to come along as a guest.
+reset role;
+set role authenticated;
+select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-00000000000a', false);
+select test.throws($$ select public.create_circle(' ', 4, '18:00', 'Africa/Cairo', '8a3e6281ba1ffff') $$, 'a circle needs a name');
+select test.throws($$ select public.create_circle('X', 4, '25:00', 'Africa/Cairo', '8a3e6281ba1ffff') $$, 'times are checked');
+select test.throws($$ select public.create_circle('X', 7, '18:00', 'Africa/Cairo', '8a3e6281ba1ffff') $$, 'days are checked');
+select test.throws($$ select public.create_circle('X', 4, '18:00', 'Mars/Olympus', '8a3e6281ba1ffff') $$, 'time zones are checked');
+select test.throws($$ select public.create_circle('X', 4, '18:00', 'Africa/Cairo', 'nowhere') $$, 'meeting points are checked');
+create temp table the_circle as
+  select public.create_circle('  Thursday Walkers ', 4, '18:00', 'Africa/Cairo', '8a3e6281ba1ffff', 'Corniche steps') as id;
+create temp table circle_view as select * from public.my_circles();
+select test.ok((select name = 'Thursday Walkers' and role = 'owner' and district = 'r10' and district_name = 'Zamalek'
+    and not guests and goal_km = 30 and jsonb_array_length(members) = 1 from circle_view),
+  'starting a circle: you own it, in the meeting point''s district, and guests are off');
+select test.ok((select extract(dow from (next->>'starts_at')::timestamptz at time zone 'Africa/Cairo') = 4
+    and to_char((next->>'starts_at')::timestamptz at time zone 'Africa/Cairo', 'HH24:MI') = '18:00'
+    and (next->>'starts_at')::timestamptz > now() from circle_view),
+  'its first walk is booked for the next Thursday at 18:00, Cairo time');
+select test.throws($$ select * from public.circles $$, 'circles are not readable directly');
+select test.throws($$ select * from public.session_people $$, 'nor who is on a walk');
+select test.throws($$ insert into public.circle_members (circle_id, user_id) values ((select id from the_circle), auth.uid()) $$,
+  'no joining without the code');
+create temp table circle_session as select (next->>'id')::bigint as id, code from circle_view;
+
+select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-00000000000c', false);
+select test.ok(not exists (select 1 from public.circles_near('r10')), 'circles are not listed unless they welcome guests');
+select test.throws($$ select public.ask_to_join((select id from circle_session)) $$, 'and take no guests');
+select test.throws($$ select public.rsvp((select id from circle_session), 'in') $$, 'strangers cannot answer for a walk');
+select test.throws($$ select * from public.my_circle((select id from the_circle)) $$, 'nor see the circle');
+
+select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-00000000000a', false);
+select public.update_circle((select id from the_circle), 'Thursday Walkers', 4, '18:00', 'Africa/Cairo', '8a3e6281ba1ffff',
+  'Corniche steps', 30, true);
+select test.ok((select next->>'id' from public.my_circles())::bigint = (select id from circle_session),
+  'changing only the guests setting keeps the booked walk');
+
+select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-00000000000c', false);
+select test.ok((select size = 1 and weekday = 4 and at_time = '18:00' and asked is null from public.circles_near('r10')),
+  'welcoming guests: listed by size and schedule');
+select test.ok(not exists (select 1 from public.circles_near('r20')), 'only in its own district');
+select public.ask_to_join((select id from circle_session));
+select test.ok((select not approved and circle_name is null and meet_cell is null and people is null from public.my_guest_walks()),
+  'until the owner says yes, a guest knows only the schedule');
+select test.ok((select asked = 'asked' from public.circles_near('r10')), 'and sees they asked');
+select set_config('realtime.topic', 'circle-session:' || (select id from circle_session), false);
+select test.throws($$ insert into realtime.messages (topic, event) values (realtime.topic(), 'hexes') $$,
+  'a guest waiting for an answer cannot join the live walk');
+
+select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-00000000000b', false);
+select test.ok((select id from public.join_circle(lower((select code from circle_session)))) = (select id from the_circle),
+  'joining with the code');
+select public.join_circle((select code from circle_session));
+select test.ok((select jsonb_array_length(members) = 2 and role = 'member' from public.my_circles()), 'joining twice is joining once');
+select test.ok((select not exists (select 1 from jsonb_array_elements(next->'people') p where p->>'name' = 'carol')
+    from public.my_circles()), 'only the owner sees guests who asked');
+select test.throws($$ select public.update_circle((select id from the_circle), 'Mine now', 4, '18:00', 'Africa/Cairo',
+  '8a3e6281ba1ffff', null, 30, true) $$, 'only the owner changes the circle');
+select test.throws($$ select public.answer_guest((select id from circle_session), '00000000-0000-0000-0000-00000000000c', true) $$,
+  'or answers guests');
+select public.rsvp((select id from circle_session), 'out');
+select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-00000000000d', false);
+select public.join_circle((select code from circle_session));
+
+select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-00000000000a', false);
+select test.ok((select exists (select 1 from jsonb_array_elements(next->'people') p where p->>'name' = 'carol' and not (p->>'approved')::boolean)
+    and exists (select 1 from jsonb_array_elements(next->'people') p where p->>'name' = 'bob' and p->>'rsvp' = 'out')
+    from public.my_circles()), 'the owner sees who asked and who can''t make it');
+select test.ok((select bool_and(m ? 'walked_week') and not bool_or(m ? 'last_walk')
+    from public.my_circles(), jsonb_array_elements(members) m), 'members see whether each walked this week, not when');
+select public.answer_guest((select id from circle_session), '00000000-0000-0000-0000-00000000000c', true);
+
+select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-00000000000c', false);
+select test.ok((select approved and circle_name = 'Thursday Walkers' and meet_cell = '8a3e6281ba1ffff'
+    and people = array['Alice', 'bob', 'dave'] from public.my_guest_walks()),
+  'once approved, a guest sees the circle, where to meet and first names');
+select test.ok((select count(*) from realtime.messages) = 0, 'and can read the live walk');
+insert into realtime.messages (topic, event) values (realtime.topic(), 'hexes');
+select test.throws($$ select public.circle_check_in((select id from circle_session), '8a3e6281ba17fff') $$,
+  'no checking in days before the walk');
+
+-- The walk is about to start.
+reset role;
+update public.circle_sessions set starts_at = now() + interval '10 minutes' where id = (select id from circle_session);
+set role authenticated;
+select test.throws($$ select public.circle_check_in((select id from circle_session), '8a3e628c24cffff') $$,
+  'check in at the meeting point, not across town');
+select test.ok((select count(*) = 1 from public.circle_check_in((select id from circle_session), '8a3e6281ba17fff')),
+  'a guest checks in at the meeting point, on a hex they never walked');
+select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-00000000000d', false);
+select test.ok((select count(*) = 2 from public.circle_check_in((select id from circle_session), '8a3e6281baaffff')),
+  'then a member');
+reset role;
+select test.ok((select count(*) = 2 and bool_and(met_with is not null) from public.checkins
+    where kind = 'meetup' and user_id in ('00000000-0000-0000-0000-00000000000c', '00000000-0000-0000-0000-00000000000d')),
+  'two on the walk checked in: a verified meetup each, though they aren''t friends');
+select test.ok(not public.are_friends('00000000-0000-0000-0000-00000000000c', '00000000-0000-0000-0000-00000000000d'),
+  'walking together doesn''t make you friends');
+set role authenticated;
+select test.ok((select met from public.my_firsts()), 'walking with someone is a first');
+select public.log_circle_walk((select id from circle_session), now(), 2.1, 12);
+select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-00000000000a', false);
+select test.throws($$ select public.log_circle_walk((select id from circle_session), now(), 1, 1) $$,
+  'check in before walking together');
+select test.throws($$ select public.circle_kudos_toggle((select id from circle_session), '00000000-0000-0000-0000-00000000000d', true) $$,
+  'kudos are for people who walked together');
+select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-00000000000c', false);
+select public.log_circle_walk((select id from circle_session), now(), 1.9, 9);
+select public.circle_kudos_toggle((select id from circle_session), '00000000-0000-0000-0000-00000000000d', true);
+select test.throws($$ select public.circle_kudos_toggle((select id from circle_session), auth.uid(), true) $$, 'no kudos to yourself');
+select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-00000000000d', false);
+select test.ok((select count(*) = 2 and sum(hexes) = 21 and bool_or(me and kudos = 1) and bool_and(circle_name = 'Thursday Walkers')
+    from public.circle_walk((select id from circle_session))), 'the circle walk: who came, what each walked, kudos');
+select test.ok((select week_km = 4 and streak = 1 from public.my_circles()), 'this week counts, and its km go to the goal');
+
+-- Booking next week, and changing the day.
+create temp table booked as select public.book_next((select id from the_circle)) as t;
+select test.ok((select t > now() and extract(dow from t at time zone 'Africa/Cairo') = 4
+    and to_char(t at time zone 'Africa/Cairo', 'HH24:MI') = '18:00' from booked), 'same time next week, booked');
+select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-00000000000a', false);
+select public.update_circle((select id from the_circle), 'Thursday Walkers', 6, '07:00', 'Africa/Cairo', '8a3e6281ba1ffff',
+  null, 30, false);
+reset role;
+select test.ok(exists (select 1 from public.circle_sessions where id = (select id from circle_session)),
+  'a new day keeps a walk people already checked in to');
+select test.ok((select count(*) = 1 and bool_and(extract(dow from starts_at at time zone 'Africa/Cairo') = 6)
+    from public.circle_sessions where circle_id = (select id from the_circle) and starts_at > now() + interval '1 hour'),
+  'and moves the walks ahead to the new day');
+
+-- The streak: weeks with two or more together; one missed week a month is forgiven.
+create temp table streak_circles (n int, id bigint);
+insert into public.circles (name, meet_cell, weekday, at_time, tz, created_at)
+  values ('S1', '8a3e6281ba1ffff', 1, '09:00', 'UTC', date_trunc('week', now() at time zone 'UTC') at time zone 'UTC' - interval '21 days'),
+         ('S2', '8a3e6281ba1ffff', 1, '09:00', 'UTC', date_trunc('week', now() at time zone 'UTC') at time zone 'UTC' - interval '21 days');
+insert into streak_circles select 1, id from public.circles where name = 'S1';
+insert into streak_circles select 2, id from public.circles where name = 'S2';
+create function test.walked(circle bigint, weeks_ago int) returns void language sql as $$
+  with s as (insert into public.circle_sessions (circle_id, starts_at)
+    values (circle, date_trunc('week', now() at time zone 'UTC') at time zone 'UTC' - weeks_ago * interval '7 days' + interval '1 hour')
+    returning id)
+  insert into public.session_people (session_id, user_id, checked_in_at)
+  select s.id, u, now() from s, unnest(array['00000000-0000-0000-0000-00000000000a', '00000000-0000-0000-0000-00000000000d']::uuid[]) u
+$$;
+-- S1: this week, last week, missed one, the week before.
+select test.walked((select id from streak_circles where n = 1), w) from unnest(array[0, 1, 3]) w;
+select test.ok((select weeks = 3 from public.circle_streak((select id from streak_circles where n = 1))),
+  'a missed week is forgiven');
+-- S2: this week, two missed, the week before.
+select test.walked((select id from streak_circles where n = 2), w) from unnest(array[0, 3]) w;
+select test.ok((select weeks = case when date_trunc('month', date_trunc('week', now() at time zone 'UTC') - interval '7 days')
+      = date_trunc('month', date_trunc('week', now() at time zone 'UTC') - interval '14 days') then 1 else 2 end
+    from public.circle_streak((select id from streak_circles where n = 2))),
+  'two missed weeks in one month end the streak');
+delete from public.circles where name in ('S1', 'S2');
+
+-- Leaving: the longest-standing member takes over; the last one out takes the circle.
+set role authenticated;
+select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-00000000000a', false);
+select public.leave_circle((select id from the_circle));
+select test.ok(not exists (select 1 from public.my_circles()), 'leaving a circle');
+select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-00000000000b', false);
+select test.ok((select role = 'owner' and jsonb_array_length(members) = 2 from public.my_circles()),
+  'the next member takes over from an owner who leaves');
+select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-00000000000d', false);
+select public.leave_circle((select id from the_circle));
+-- (bob deletes his account below: the circle goes with its last member)
+reset role;
+delete from public.checkins where kind = 'meetup'
+  and user_id in ('00000000-0000-0000-0000-00000000000c', '00000000-0000-0000-0000-00000000000d');
+select set_config('realtime.topic', '', false);
+
+-- ---------- belonging: home, matchups, open challenges, reactions, invites ----------
+reset role;
+set role authenticated;
+select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-00000000000a', false);
+create temp table warmth as select * from public.district_warmth('r10');
+reset role;
+select test.ok((select w.hexes = (select count(distinct cell) from public.user_cells where district = 'r10')
+    and w.warm = (select count(*) from (select cell from public.user_cells where district = 'r10'
+      group by cell having max(last_visited) >= now() - interval '60 days') x)
+    and w.pct = round(100.0 * w.warm / w.hexes)
+    and w.mine_warm = (select count(*) from public.user_cells where user_id = '00000000-0000-0000-0000-00000000000a'
+      and district = 'r10' and last_visited >= now() - interval '60 days')
+    from warmth w), 'district warmth: hexes walked by anyone in the last 60 days, and yours');
+set role authenticated;
+select test.throws($$ select * from public.district_warmth('zamalek') $$, 'district ids are checked');
+
+create temp table matchup as select * from public.district_matchup('r10');
+select test.ok((select rival is not null and rival <> 'r10' and pct between 0 and 100 and ends_at > now() from matchup),
+  'a district gets a rival in its city for the week');
+select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-00000000000d', false);
+select test.ok((select rival = 'r10' from public.district_matchup((select rival from matchup))), 'and its rival is paired back');
+select test.ok((select rival from public.district_matchup('r10')) = (select rival from matchup), 'the pairing stays for the week');
+select test.throws($$ select * from public.district_matchups $$, 'pairings are not readable directly');
+
+reset role;
+create temp table open_challenge as select public.add_area_challenge('r10', 'Warm Z1 and Z2', 'Two hexes by the river', 'cells', null,
+  array['8a3e6281ba1ffff', '8a3e6281ba17fff']) as id;
+grant select on open_challenge to authenticated;
+select public.add_area_challenge('r10', 'Over already', null, 'warmth', 50, null, now() - interval '10 days', now() - interval '1 day');
+select public.add_area_challenge('r20', 'Elsewhere', null, 'landmarks');
+set role authenticated;
+select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-00000000000c', false);
+select test.throws($$ select public.add_area_challenge('r10', 'Mine', null, 'warmth', 50) $$, 'only admins add open challenges');
+select test.ok((select count(*) = 1 and bool_and(title = 'Warm Z1 and Z2' and not joined and members = 0 and progress = 1)
+    from public.area_challenges_for('r10')), 'the challenges running in a district, with how far along they are');
+select public.join_area_challenge((select id from open_challenge), true);
+select test.ok((select joined and members = 1 from public.area_challenges_for('r10')), 'joining one');
+select public.join_area_challenge((select id from open_challenge), false);
+select test.ok((select not joined and members = 0 from public.area_challenges_for('r10')), 'and leaving it');
+
+-- Reactions: alice and bob are friends; carol isn't.
+select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-00000000000a', false);
+create temp table bob_checkin as select id::text as item from public.checkins
+  where user_id = '00000000-0000-0000-0000-00000000000b' order by id limit 1;
+select public.react('checkin', (select item from bob_checkin), '🔥');
+select public.react('badge', '00000000-0000-0000-0000-00000000000b:first_meetup', '👏');
+select test.throws($$ select public.react('checkin', (select id::text from public.checkins
+  where user_id = auth.uid() limit 1), '🔥') $$, 'no kudos to yourself');
+select test.throws($$ select public.react('badge', '00000000-0000-0000-0000-00000000000b:hex_10000', '👏') $$, 'only on things that exist');
+select test.throws($$ select public.react('checkin', (select item from bob_checkin), '💩') $$, 'the four kudos only');
+select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-00000000000c', false);
+select test.throws($$ select public.react('checkin', (select item from bob_checkin), '👏') $$, 'kudos are for friends');
+select test.ok(not exists (select 1 from public.reactions_for('checkin', array[(select item from bob_checkin)])),
+  'and strangers don''t see them');
+select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-00000000000b', false);
+select test.ok((select n = 1 and emoji = '🔥' and not mine from public.reactions_for('checkin', array[(select item from bob_checkin)])),
+  'reactions on a check-in');
+select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-00000000000a', false);
+select public.react('checkin', (select item from bob_checkin), '❤️');
+select test.ok((select count(*) = 1 and bool_and(emoji = '❤️' and mine) from public.reactions_for('checkin', array[(select item from bob_checkin)])),
+  'one reaction each: picking another changes it');
+select public.react('checkin', (select item from bob_checkin), null);
+select test.ok(not exists (select 1 from public.reactions_for('checkin', array[(select item from bob_checkin)])), 'and it can be taken back');
+
+-- Who found your landmark: friends by name; carol and dave aren't alice's friends.
+select test.ok((select count(*) = 1 and bool_and(finder_name = 'bob' and title = 'Nile view')
+    from public.landmark_finds_feed(now() + interval '1 minute')), 'your feed names friends who found your landmark, and only them');
+select public.react('find', (select landmark_id || ':' || finder from public.landmark_finds_feed(now() + interval '1 minute')), '👣');
+select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-00000000000c', false);
+select test.ok(not exists (select 1 from public.landmark_finds_feed(now() + interval '1 minute')), 'nobody else''s');
+
+-- Personal invite codes.
+select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-00000000000a', false);
+insert into public.landmarks (cell, kind, title, welcome) values ('8a3e6281baaffff', 'food', 'Corner café', true);
+create temp table invite as select * from public.new_invite();
+select test.ok((select code ~ '^ZAM-[A-Z0-9]{4}$' and expires_at > now() + interval '6 days' and landmark_title = 'Corner café' from invite),
+  'a personal code, named for your district, carrying your welcome landmark');
+select test.ok((select code from public.new_invite()) = (select code from invite), 'the open code is reused until it''s used');
+select test.throws($$ select * from public.use_invite((select code from invite)) $$, 'not your own');
+select test.throws($$ select * from public.invite_codes $$, 'codes are not readable directly');
+select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-00000000000c', false);
+select test.ok((select status = 'accepted' and username = 'alice' and landmark_id is not null
+    from public.use_invite(lower((select code from invite)))), 'using it: friends straight away, with a welcome to find');
+reset role;
+select test.ok((select status = 'accepted' and expires_at between now() + interval '29 days' and now() + interval '31 days'
+    from public.friendships where requester = '00000000-0000-0000-0000-00000000000a' and addressee = '00000000-0000-0000-0000-00000000000c'),
+  'for the usual 30 days');
+update public.friendships set expires_at = now() + interval '3 days'
+  where requester = '00000000-0000-0000-0000-00000000000a' and addressee = '00000000-0000-0000-0000-00000000000c';
+set role authenticated;
+select test.ok((select status = 'already' from public.use_invite((select code from invite))), 'using it again changes nothing');
+reset role;
+select test.ok((select expires_at < now() + interval '4 days' from public.friendships
+    where requester = '00000000-0000-0000-0000-00000000000a' and addressee = '00000000-0000-0000-0000-00000000000c'),
+  'a code never renews a friendship: that stays a choice you both make');
+set role authenticated;
+select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-00000000000d', false);
+select test.throws($$ select * from public.use_invite((select code from invite)) $$, 'each code works for one person');
+select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-00000000000a', false);
+select test.ok((select used_by_name = 'carol' from public.my_invites() where code = (select code from invite)), 'you see who used your code');
+select test.ok((select code from public.new_invite()) <> (select code from invite), 'and the next one is new');
+reset role;
+create temp table carol_code as select invite_code as code from public.profiles where username = 'carol';
+grant select on carol_code to authenticated;
+set role authenticated;
+select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-00000000000d', false);
+select test.ok((select status = 'pending' and username = 'carol' and landmark_id is null
+    from public.use_invite((select code from carol_code))), 'old-style codes still send a friend request');
+reset role;
+delete from public.friendships where requester = '00000000-0000-0000-0000-00000000000d' and addressee = '00000000-0000-0000-0000-00000000000c';
+delete from public.landmarks where title = 'Corner café';
+delete from public.friendships where requester = '00000000-0000-0000-0000-00000000000a' and addressee = '00000000-0000-0000-0000-00000000000c';
+delete from public.reactions;
+
 -- ---------- anon and account deletion ----------
 reset role;
 set role anon;
@@ -617,6 +903,8 @@ select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-00000000000b
 select public.delete_my_account();
 reset role;
 select test.ok(not exists (select 1 from public.profiles where username = 'bob'), 'account deletion removes the profile');
+select test.ok(not exists (select 1 from public.circles where id = (select id from the_circle)),
+  'and a circle whose last member was them');
 select test.ok(not exists (select 1 from public.user_cells where user_id = '00000000-0000-0000-0000-00000000000b'), 'and the cells');
 select test.ok(not exists (select 1 from public.score_events where user_id = '00000000-0000-0000-0000-00000000000b'), 'and the score log');
 select test.ok((select met_with from public.checkins where kind = 'meetup') is null, 'and unlinks meetups');

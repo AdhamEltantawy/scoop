@@ -774,6 +774,166 @@ button.first:disabled { cursor: default; }
   100% { transform: translate(var(--x), var(--y)) scale(1); opacity: 0; }
 }
 
+/* ---------- belonging: circles ---------- */
+
+.panel.friend { background: var(--friend-tint); }
+.progress.friend .progress-fill { background: var(--friend); }
+.btn.friend { background: var(--friend); color: #fff; }
+.row-val.friend { color: var(--friend); font-weight: 600; }
+.muted { color: var(--muted); font-weight: 500; }
+.dot { flex: none; width: 10px; height: 10px; border-radius: 50%; background: var(--muted); }
+.dot.friend { background: var(--friend); }
+.dot.pulse { animation: pulse 1.4s ease-in-out infinite; }
+.note-row { display: flex; align-items: center; gap: 12px; padding: 14px 16px; border-radius: var(--r-tile); background: var(--friend-tint); font-size: 13.5px; }
+.streak-line { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.circle-dots { flex: none; display: flex; }
+.circle-dots span { width: 14px; height: 14px; margin-right: -4px; border-radius: 50%; border: 2px solid var(--surface-2); background: var(--friend); }
+.list-row > .circle-dots:first-child, .list-row > .avatar:first-child { flex: none; overflow: visible; }
+.list-row > .avatar + span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.list-row > .circle-dots + span { flex: 1; min-width: 0; }
+.guest-offer { display: flex; flex-direction: column; gap: 10px; padding: 14px 16px; border: 2px solid var(--friend); border-radius: 18px; }
+.guest-offer .btn.ghost { height: 36px; }
+
+/* The next walk, and who's coming */
+.circle-next { display: flex; flex-direction: column; gap: 12px; padding: 14px; border-radius: 18px; border: 1.5px solid var(--line); }
+.circle-next .top { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.circle-next .top b { font: 700 17px var(--font-display); }
+.people { display: flex; flex-direction: column; gap: 8px; }
+.person-line { display: flex; align-items: center; gap: 10px; font-size: 14px; }
+.person-line > span[dir] { flex: 1; min-width: 0; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.person-line .status { font-size: 12.5px; color: var(--muted); }
+.person-line.on .status { color: var(--friend); font-weight: 700; }
+.chip.rsvp { height: 44px; border-radius: 22px; font-size: 14px; }
+.chip.rsvp[aria-pressed="true"] { background: var(--you); border-color: var(--you); color: var(--on-you); }
+.verified { padding: 12px 14px; border-radius: var(--r-tile); background: var(--friend-tint); color: var(--friend); font-weight: 700; text-align: center; }
+
+/* Setup */
+.place-row { display: flex; align-items: center; gap: 12px; padding: 12px 14px; border-radius: var(--r-tile); background: var(--surface-2); }
+.place-row .pin { font-size: 20px; }
+.place-row > div { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.place-row small { font-size: 12.5px; color: var(--muted); }
+.place-row .link { min-height: 28px; }
+.chips .chip[aria-pressed="true"] { background: var(--you); border-color: var(--you); color: var(--on-you); }
+.input.time { width: auto; height: 34px; padding: 0 10px; border-radius: 17px; font-size: 13px; }
+
+/* Invite */
+.invite-preview {
+  padding: 14px 16px; border-radius: var(--r-tile); background: var(--surface-2);
+  font-size: 14px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere;
+}
+.invite-preview .link-line { display: block; margin-top: 6px; color: var(--accent-ink); font-weight: 600; }
+.joined-row { display: flex; align-items: center; gap: 12px; padding: 14px 16px; border-radius: var(--r-tile); background: var(--friend-tint); }
+.joined-row > div { display: flex; flex-direction: column; gap: 1px; }
+.joined-row small { font-size: 12.5px; color: var(--muted); }
+
+/* Can't make it */
+.cant-card { display: flex; flex-direction: column; gap: 8px; padding: 16px; border-radius: 18px; background: var(--surface-2); }
+.avatars { display: flex; }
+.avatars .avatar { border: 2px solid var(--surface); margin-right: -6px; }
+
+/* Walking together, in the recording card */
+.together { display: flex; align-items: center; gap: 10px; padding-top: 10px; border-top: 1px solid var(--line); font-size: 13px; }
+.together .avatars .avatar { border-color: var(--chrome); }
+.together-text { flex: 1; min-width: 0; color: var(--muted); }
+.together-text b { color: var(--friend); font: 700 16px var(--font-display); }
+
+/* Circle walk saved */
+.welcome-card.together { background: var(--friend); }
+.together-mark { font-size: 26px; line-height: 1; }
+.book-row { display: flex; align-items: center; gap: 12px; padding: 12px 14px; border-radius: var(--r-tile); background: var(--friend-tint); }
+.book-row > div { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.book-row small { font-size: 12.5px; color: var(--muted); }
+.list-row .chip { flex: none; height: 30px; padding: 0 10px; }
+.walk-people .list-row { flex-wrap: wrap; row-gap: 6px; padding-top: 10px; padding-bottom: 10px; }
+.walk-people .renew-line { order: 5; flex-basis: 100%; padding-left: 32px; }
+.list-row .chip[aria-pressed="true"] { background: var(--ink); border-color: var(--ink); color: var(--bg); }
+
+/* "Thursday Walkers · walk in 1 hour" */
+.circle-banner { border: 2px solid var(--friend); animation: rise .25s ease-out; }
+.circle-banner-icon { flex: none; font-size: 22px; line-height: 1; }
+/* One banner at a time: walking and landmark banners come first. */
+.nudge:not([hidden]) ~ .circle-banner { display: none; }
+.circle-banner:not([hidden]) ~ .map-hint { display: none; }
+body.circle-banner-on:not(.walking) .edge-controls { bottom: calc(180px + var(--safe-bottom)); }
+
+/* ---------- belonging: home, ranks, challenges, bringing someone in ---------- */
+
+/* The home panel takes the idle card's place when signed in, in a known district. */
+body.home-on[data-phase="idle"] .phase-idle { display: none; }
+body.home-on[data-phase="idle"] .phase-home { display: flex; }
+.phase-home { gap: 10px; }
+body.home-on[data-phase="idle"] .toast { top: calc(var(--top) + 196px); }
+body.home-on[data-phase="idle"] .compare-bar { top: calc(var(--top) + 192px); }
+.home-tabs { display: flex; gap: 6px; flex-wrap: wrap; }
+.home-tab {
+  display: flex; align-items: center; gap: 6px; height: 30px; padding: 0 12px; border-radius: var(--r-chip);
+  border: 1.5px solid var(--line); background: transparent; color: var(--ink); font-size: 12.5px; font-weight: 700;
+  max-width: 100%; overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+}
+.home-tab .dot { width: 8px; height: 8px; }
+.home-tab.tab-place .dot { background: var(--accent); }
+.home-tab.tab-people .dot { background: var(--friend); }
+.home-tab[aria-pressed="true"] { background: var(--ink); border-color: var(--ink); color: var(--bg); }
+.home-face { display: flex; flex-direction: column; gap: 8px; }
+.home-big { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.home-big b { font: 700 30px/1 var(--font-display); font-variant-numeric: tabular-nums; }
+.home-big span { font-size: 12.5px; color: var(--muted); }
+.home-bar { position: relative; display: flex; height: 8px; border-radius: 4px; background: var(--surface-2); overflow: visible; }
+.home-bar > span { height: 8px; }
+.home-bar > span:first-child { border-radius: 4px 0 0 4px; }
+.home-bar .shared { background: var(--accent); }
+.home-bar .you { background: var(--you); }
+.home-bar .together { background: var(--friend); border-radius: 4px; }
+.home-bar .goal { position: absolute; top: -3px; width: 2px; height: 14px; background: var(--ink); border-radius: 1px; }
+.home-line { display: flex; justify-content: space-between; gap: 8px; font-size: 12px; color: var(--muted); }
+.home-line b { color: var(--ink); }
+.home-people { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.home-banner { display: flex; align-items: center; gap: 10px; padding-top: 10px; border-top: 1px solid var(--line); }
+.home-banner .icon { flex: none; font-size: 20px; line-height: 1; }
+.home-banner > div { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.home-banner b { font-size: 13px; }
+.home-banner small { font-size: 11.5px; color: var(--muted); }
+.home-banner .btn.sm { height: 36px; border-radius: 18px; padding: 0 14px; font-size: 13px; }
+
+/* Ranks and challenges cards */
+.rank-card {
+  display: flex; align-items: center; gap: 12px; padding: 12px 14px; border: 0; border-radius: var(--r-tile);
+  background: var(--tint); color: var(--ink); text-align: left; font-size: 13.5px;
+}
+.rank-card.friend { background: var(--friend-tint); }
+.rank-card .icon { flex: none; font-size: 20px; }
+.rank-card > div { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.rank-card small { font-size: 12px; color: var(--muted); }
+.rank-card .big-pos { flex: none; font: 700 18px var(--font-display); color: var(--accent-ink); }
+.rank-card.friend .big-pos { color: var(--friend); }
+.chal-hero, .chal-goal, .open-chal { display: flex; flex-direction: column; gap: 10px; padding: 14px; border-radius: 18px; }
+.chal-hero { background: var(--tint); }
+.chal-goal { background: var(--friend-tint); }
+.open-chal { border: 1.5px solid var(--line); }
+.chal-hero .top, .chal-goal .top, .open-chal .top { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+.open-chal .top > div { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.open-chal small { font-size: 12px; color: var(--muted); }
+.vs { display: flex; flex-direction: column; gap: 8px; }
+.vs-row { display: grid; grid-template-columns: minmax(0, 7em) 1fr auto; align-items: center; gap: 10px; font-size: 13px; }
+.vs-row > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.vs-row b { font: 700 15px var(--font-display); }
+.progress.quiet .progress-fill { background: var(--muted); }
+
+/* Bring someone in */
+.bring { display: flex; flex-direction: column; gap: 10px; padding: 14px; border-radius: 18px; background: var(--tint); }
+.bring-head { display: flex; flex-direction: column; gap: 2px; }
+.bring-head b { font: 700 17px var(--font-display); }
+.bring-head small { font-size: 12.5px; color: var(--muted); }
+.bring-lm { display: flex; gap: 10px; align-items: center; font-size: 13px; }
+.bring-lm > span:first-child { font-size: 22px; }
+.bring .invite { background: var(--surface); }
+
+/* Your landmark, on top of the feed */
+.your-landmark { display: flex; gap: 12px; align-items: center; padding: 12px 14px; border-radius: var(--r-tile); background: var(--you-tint); }
+.your-landmark .emoji { font-size: 28px; line-height: 1; }
+.your-landmark > div { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.your-landmark small { font-size: 12px; color: var(--muted); }
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; }
 }
