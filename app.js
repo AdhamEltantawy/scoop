@@ -1480,7 +1480,7 @@
   const ONBOARDED_KEY = 'scoop.onboarded.v1';
   // Three cards: what Scoop is, that routes stay on the phone, and why it needs location.
   const ONB = [
-    { t: 'Every walk warms your neighbourhood', b: 'Each street-sized hex you walk lights up. Your neighbours are warming theirs too, and it all adds up on one shared map.', p: 'Next', mark: 'word' },
+    { t: 'Every walk warms your neighbourhood', b: 'Each street-sized hex you walk lights up. Your neighbours are warming theirs too, and together you warm up your district.', p: 'Next', mark: 'word' },
     { t: 'Private by default', b: 'Your map lives on this phone. Scoop never draws or uploads your routes. Neighbours only ever see "an explorer", and friends are up to you.', p: 'Next', mark: 'lock' },
     { t: 'Scoop needs your location while you walk', b: "It lights up hexes and shows you what's nearby. Your location and routes stay on this phone; Scoop only looks up totals for your area.", p: 'Allow location', s: 'Not now', mark: 'pin' },
   ];

@@ -592,7 +592,7 @@ the buttons (the active dot stretches to a 22px ember pill).
 
 | # | Title | Body | Visual | Buttons |
 | --- | --- | --- | --- | --- |
-| 1 | Every walk warms your neighbourhood | Each street-sized hex you walk lights up. Your neighbours are warming theirs too, and it all adds up on one shared map. | "scoop" wordmark in ember over the 5 heat-band hexes | Next |
+| 1 | Every walk warms your neighbourhood | Each street-sized hex you walk lights up. Your neighbours are warming theirs too, and together you warm up your district. | "scoop" wordmark in ember over the 5 heat-band hexes | Next |
 | 2 | Private by default | Your map lives on this phone. Scoop never draws or uploads your routes. Neighbours only ever see "an explorer", and friends are up to you. | Lock in a blue-tinted hexagon | Next |
 | 3 | Scoop needs your location while you walk | It lights up hexes and shows you what's nearby. Your location and routes stay on this phone; Scoop only looks up totals for your area. | Pin in a blue-tinted hexagon | Allow location · Not now |
 | — | Location is off | Scoop can't light up hexes without it. Allow location for this site in your browser settings (app: Settings → Apps → Scoop → Location), then come back. | — | Try again · Look around the map |
@@ -767,7 +767,7 @@ the feed: 👟 ⬡ 🗺️ 🌍 🏅 🚶 🔥 🌋 🏠 🤝 ☕ 📷).
 
 | | You | Friends | Everyone else signed in |
 | --- | --- | --- | --- |
-| Your hexes on a map | ✓ | ✓ (Compare, Community map) | Only as a count in the community map |
+| Your hexes on a map | ✓ | ✓ (Compare, Community map) | ✗ (only counted in a district's warmth and explorer count) |
 | When you visited | ✓ | ✗ | ✗ |
 | GPS route | On device only | ✗ | ✗ |
 | Walks (distance, new hexes) | ✓ | ✓ (feed) | ✗ |
