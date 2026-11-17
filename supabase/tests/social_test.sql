@@ -758,6 +758,35 @@ select test.ok((select weeks = case when date_trunc('month', date_trunc('week', 
   'two missed weeks in one month end the streak');
 delete from public.circles where name in ('S1', 'S2');
 
+-- A circle is in its meeting point's district, never its owner's home (alice's is Zamalek).
+-- 8a3e628c24dffff and 8a3e628c24effff: nobody has walked them. M1: bob tagged it Maadi.
+set role authenticated;
+select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-00000000000a', false);
+create temp table d_circles as select
+  public.create_circle('D1', 1, '09:00', 'UTC', '8a3e628c24dffff', null, 30, true, 'r20') as looked_up,
+  public.create_circle('D2', 1, '09:00', 'UTC', '8a3e628c24dffff', null, 30, true, 'zamalek') as unknown;
+reset role;
+select test.ok((select district from public.circles where id = (select looked_up from d_circles)) = 'r20',
+  'a circle on an unwalked hex is in the district the app looked up for it');
+select test.ok((select district is null from public.circles where id = (select unknown from d_circles)),
+  'with no district to go on it has none, not its owner''s home');
+set role authenticated;
+select test.ok(not exists (select 1 from public.circles_near('r10') where id = (select unknown from d_circles)),
+  'so it isn''t listed for guests in the owner''s district');
+select public.update_circle((select unknown from d_circles), 'D2', 1, '09:00', 'UTC', '8a3e628c24cffff', null, 30, true, 'r10');
+select public.update_circle((select looked_up from d_circles), 'D1', 1, '09:00', 'UTC', '8a3e628c24dffff', null, 30, true);
+reset role;
+select test.ok((select district from public.circles where id = (select unknown from d_circles)) = 'r20',
+  'moving the meeting point moves the circle to the district walkers tagged there, over the app''s lookup');
+select test.ok((select district from public.circles where id = (select looked_up from d_circles)) = 'r20',
+  'a circle that stays put keeps its district when the app can''t tell');
+set role authenticated;
+select public.update_circle((select looked_up from d_circles), 'D1', 1, '09:00', 'UTC', '8a3e628c24effff', null, 30, true);
+reset role;
+select test.ok((select district is null from public.circles where id = (select looked_up from d_circles)),
+  'one moved somewhere nobody can tell has no district');
+delete from public.circles where id in (select looked_up from d_circles union select unknown from d_circles);
+
 -- Leaving: the longest-standing member takes over; the last one out takes the circle.
 set role authenticated;
 select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-00000000000a', false);
