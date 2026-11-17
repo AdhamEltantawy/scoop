@@ -34,6 +34,9 @@
       <div class="warmth"><div class="warmth-bar" id="warmthBar"></div><span id="warmthPct">0% warm</span></div>
     </div>
 
+    <!-- Signed in, in a known district: your district and your circle (home.js) -->
+    <div class="phase phase-home" id="homePanel"></div>
+
     <div class="phase phase-empty">
       <span class="card-title">Your map is waiting</span>
       <span class="card-body">Tap Start walk and head out. Your first hexes light up once you've walked 100 m.</span>
@@ -149,6 +152,11 @@
       <div class="tile"><span class="tile-num" id="meScore">0</span><span class="tile-lbl">score</span></div>
       <div class="tile"><span class="tile-num" id="meStreak">0</span><span class="tile-lbl">day streak</span></div>
       <div class="tile"><span class="tile-num" id="meBest">0</span><span class="tile-lbl">best streak</span></div>
+    </div>
+    <div class="tiles3">
+      <div class="tile"><span class="tile-num" id="meHexes">0</span><span class="tile-lbl">hexes</span></div>
+      <div class="tile"><span class="tile-num" id="meArea">0</span><span class="tile-lbl">km² explored</span></div>
+      <div class="tile"><span class="tile-num" id="meWarm">0%</span><span class="tile-lbl">of your map warm</span></div>
     </div>
     <div id="meFirsts"></div>
     <div id="meCircles"></div>
@@ -292,5 +300,6 @@
   <script src="areas.js"></script>
   <script src="social.js"></script>
   <script src="circles.js"></script>
+  <script src="home.js"></script>
 </body>
 </html>

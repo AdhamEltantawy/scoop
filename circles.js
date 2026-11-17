@@ -106,6 +106,7 @@
   }
 
   function afterLoad() {
+    document.dispatchEvent(new CustomEvent('scoop:circles', { detail: { circles } }));
     updateBanner();
     scheduleReminders();
     if (S.currentSheet() === 'meSheet') renderMeRow();
