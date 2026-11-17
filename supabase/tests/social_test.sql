@@ -548,6 +548,59 @@ select test.ok(exists (select 1 from public.area_ranking('r10', now() - interval
 delete from public.landmarks where title = 'Kiosk';
 set role authenticated;
 
+-- ---------- belonging: welcome landmarks, area pulse, firsts ----------
+-- alice walked Z1–Z3 in Zamalek (r10).
+reset role;
+set role authenticated;
+select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-00000000000a', false);
+insert into public.landmarks (cell, kind, title, welcome) values ('8a3e6281ba17fff', 'food', 'Koshary, no sign', true);
+select test.ok((select welcome from public.landmarks_near(array[public.h3_to_parent('8a3e6281ba17fff', 7)])
+    where title = 'Koshary, no sign'), 'a landmark can welcome newcomers');
+select test.ok((select welcome from public.my_landmarks() where title = 'Koshary, no sign'), 'and its author sees that');
+select test.ok((select not welcome from public.my_landmarks() where title = 'Nile view'),
+  'landmarks are not welcomes unless asked');
+create temp table pulse_alice as
+  select * from public.area_pulse('r10', array[public.h3_to_parent('8a3e6281ba17fff', 7)]);
+select test.ok((select exists (select 1 from jsonb_array_elements(pins) p
+    where p->>'cell' = '8a3e6281ba17fff' and (p->>'welcome')::boolean) from pulse_alice), 'pins show where landmarks are');
+select test.ok((select not exists (select 1 from jsonb_array_elements(pins) p
+    where p->>'cell' = '8a3e6281ba1ffff') from pulse_alice), 'but not landmarks voted down');
+select test.ok((select not exists (select 1 from jsonb_array_elements(pins) p, jsonb_object_keys(p) k
+    where k not in ('cell', 'ups', 'welcome')) from pulse_alice), 'and nothing else about them');
+select test.ok((select explorers = 0 and landmarks = 0 and cafes = 0 and ordinal = 1 and jsonb_array_length(pins) >= 1
+    from public.area_pulse(null, array[public.h3_to_parent('8a3e6281ba17fff', 7)])), 'no district: only pins');
+select test.throws($$ select * from public.area_pulse('zamalek', '{}') $$, 'district ids are checked');
+select test.throws($$ select * from public.area_pulse('r10', array['8a3e6281ba17fff']) $$, 'blocks are resolution 7');
+select test.throws($$ select * from public.area_pulse('r10', array_fill('873e6281bffffff'::text, array[8])) $$,
+  'at most 7 blocks');
+select test.ok((select walked and left_one and home = 'r10' from public.my_firsts()), 'your neighbourhood firsts');
+select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-00000000000c', false);
+select test.ok((select found from public.my_firsts()), 'finding a landmark is a first');
+
+reset role;
+set role anon;
+select set_config('request.jwt.claim.sub', '', false);
+create temp table pulse_anon as
+  select * from public.area_pulse('r10', array[public.h3_to_parent('8a3e6281ba17fff', 7)]);
+select test.throws($$ select * from public.my_firsts() $$, 'anon has no firsts');
+reset role;
+select test.ok((select a.explorers = b.explorers and a.landmarks = b.landmarks and a.pins = b.pins from pulse_anon a, pulse_alice b),
+  'anyone can see the pulse, signed in or not');
+select test.ok((select ordinal = (select count(distinct user_id) from public.user_cells where district = 'r10') + 1 from pulse_anon),
+  'signed out, you would be the next explorer');
+select test.ok((select ordinal = (select n from (
+    select user_id, row_number() over (order by min(first_visited), user_id) as n
+    from public.user_cells where district = 'r10' group by user_id) x
+    where user_id = '00000000-0000-0000-0000-00000000000a') from pulse_alice),
+  'an explorer of the district gets their place in it, by when they first walked there');
+select test.ok((select explorers = (select count(*) from (select user_id from public.user_cells where district = 'r10'
+    group by user_id having max(last_visited) >= now() - interval '60 days') x) from pulse_alice),
+  'explorers are the people who walked there lately');
+select test.ok((select landmarks = 1 from pulse_alice), 'landmarks in the district, not counting hidden ones');
+set role authenticated;
+select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-00000000000a', false);
+delete from public.landmarks where title = 'Koshary, no sign';
+
 -- ---------- anon and account deletion ----------
 reset role;
 set role anon;

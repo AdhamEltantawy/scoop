@@ -37,6 +37,10 @@
     <div class="phase phase-empty">
       <span class="card-title">Your map is waiting</span>
       <span class="card-body">Tap Start walk and head out. Your first hexes light up once you've walked 100 m.</span>
+      <div class="hood" id="hoodRow" hidden>
+        <span class="hood-hex" aria-hidden="true"></span>
+        <div><b id="hoodName" dir="auto">You're here</b><small id="hoodSub"></small></div>
+      </div>
     </div>
 
     <div class="phase phase-gps">
@@ -102,13 +106,15 @@
     <button class="icon-btn sm" id="btnLandmarkLater" aria-label="Later">✕</button>
   </div>
 
+  <div class="map-hint" id="mapHint" hidden>Walk past a <b aria-hidden="true">?</b> to see what a neighbour left</div>
+
   <nav class="bottom-row" aria-label="Main">
     <button class="round avatar-btn idle-only" id="btnMe" aria-label="Me"><span id="meInitial">·</span></button>
     <span class="spacer walk-only" aria-hidden="true"></span>
     <button class="walk-btn" id="btnWalk" aria-pressed="false">
       <svg class="hex-glyph" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2l8.66 5v10L12 22l-8.66-5V7z"/></svg>
       <span class="stop-glyph" aria-hidden="true"></span>
-      <span id="walkLabel">Start walk</span>
+      <span class="walk-label"><span id="walkLabel">Start walk</span><span class="walk-sub" id="walkSub" dir="auto"></span></span>
     </button>
     <button class="round idle-only community-only" id="btnSocial" aria-label="Friends">
       <svg viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c.8-3.6 3.4-5.5 6.5-5.5s5.7 1.9 6.5 5.5M16 4.8a3.5 3.5 0 010 6.4M18 14.8c2 .8 3.1 2.6 3.5 5.2"/></svg>
@@ -135,6 +141,7 @@
       <div class="tile"><span class="tile-num" id="meStreak">0</span><span class="tile-lbl">day streak</span></div>
       <div class="tile"><span class="tile-num" id="meBest">0</span><span class="tile-lbl">best streak</span></div>
     </div>
+    <div id="meFirsts"></div>
     <div id="meSignedOut"></div>
     <div class="panel trend">
       <div class="trend-head"><span class="trend-title" id="trendTitle">New hexes · weekly</span><span class="trend-span" id="trendSpan">12 weeks</span></div>
@@ -227,6 +234,12 @@
   <section class="sheet" id="landmarkSheet" aria-label="Landmark" hidden>
     <div class="grab"></div>
     <div id="landmarkBody"></div>
+  </section>
+
+  <!-- Your first week: neighbourhood firsts -->
+  <section class="sheet" id="firstsSheet" aria-label="Neighbourhood firsts" hidden>
+    <div class="grab"></div>
+    <div id="firstsBody"></div>
   </section>
 
   <!-- Walk saved -->
