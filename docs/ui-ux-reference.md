@@ -1146,9 +1146,9 @@ requests. Each phase has its own Supabase migration; apply them in order.
 | 2. Circles | #21 | `belonging-circles` | `20261118000000_circles.sql` |
 | 3. Home, feed, ranks, challenges, bringing someone in | #22 | `belonging-home` | `20261119000000_belonging_home.sql`, `20261120000000_home_district.sql` |
 
-As of 17 November 2026 the live project has the phase 1 and 2 migrations and the **first version** of
-`20261119000000_belonging_home.sql` (short invite codes, no `invite_misses`). The fixed version of that file
-(it upgrades in place) and `20261120000000_home_district.sql` aren't applied yet.
+As of 17 November 2026 every migration above is applied to the live project, including the fixed
+`20261119000000_belonging_home.sql` (with the upgrade lines from #26) and `20261120000000_home_district.sql`.
+Live function bodies were checked against the repo and match (live stores them with CRLF line endings).
 
 ### Decisions behind it
 
@@ -1253,9 +1253,10 @@ As of 17 November 2026 the live project has the phase 1 and 2 migrations and the
 
 ### Before shipping (you)
 
-1. **Merge in order**: #20 → #21 → #22 (each retargets to the default branch as the one below it merges).
-2. **Apply the phase 3 migrations**: re-run the fixed `20261119000000_belonging_home.sql` (live has its first
-   version), then `20261120000000_home_district.sql`. Phases 1 and 2 are already applied.
+1. ~~Merge in order~~: done 17 November 2026. #20, #23 (circles, replacing the stale #21), #22 via #23, then the
+   review fixes and follow-ups in #24, #25 (home district) and #26.
+2. ~~Apply the phase 3 migrations~~: done 17 November 2026 (the fixed `20261119000000_belonging_home.sql`, then
+   `20261120000000_home_district.sql`).
 3. **Realtime**: in the Supabase dashboard → Realtime → Settings, turn **off "Allow public access"**, or the
    private-channel policies for circle walks don't apply.
 4. **Add open challenges** for the districts you're launching in, for example:
