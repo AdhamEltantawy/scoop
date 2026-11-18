@@ -889,6 +889,14 @@ Panels and zone cards use 18px. The **hexagon clip-path** is a recurring shape
 | Status dots | `pulse` opacity 1 → .35, 1 s (GPS) / 1.4 s (recording) |
 | Progress bar | width, 250 ms linear |
 | Switches | 200 ms |
+| Hex burst (`celebrate.js`) | heat-colour hexagons on a full-screen canvas, ~1.5 s; 28 from your dot for a landmark or check-in, 40–90 on a walk summary, 140 + two side bursts for *You're a local* |
+| Count-up | summary numbers ease out from 0, 900 ms (points 1100 ms), starting 300 ms after the sheet |
+| New hexes glow | the walk's new hexes flash pale gold on the map, 1.8 s, then settle |
+| Badge reveal | `pop` + spin in from -120°, then a shine across the hex |
+| First step fills | the new hex step scales to 1.35 and turns ember, 700 ms |
+| Celebration banner | under the stats card, drops 24px + fade, 5 s, tap to dismiss |
+| *You're a local* | full screen; emblem scales and turns in, steps fill one by one 120 ms apart |
+| Haptics | `navigator.vibrate`: 30-50-30 ms on a summary, 40-40-60 on a small win, a long pattern for *You're a local* |
 
 `prefers-reduced-motion` turns all animation and transitions off.
 

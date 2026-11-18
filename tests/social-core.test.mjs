@@ -419,3 +419,24 @@ test('personal invite codes come out of links too', () => {
   assert.equal(core.parseInvite('ZAMA-7KQ2-XM4P'), null);
   assert.equal(core.parseInvite('ZAM-7KQ2'), null, 'short codes are gone');
 });
+
+test('new firsts: only what changed since the last celebration', () => {
+  const seen = { walked: true, home: true, found: false, met: false, coffee: false, left: false };
+  assert.deepEqual(core.newFirsts(seen, { ...seen, left: true }), ['left']);
+  assert.deepEqual(core.newFirsts(seen, seen), []);
+  // Nothing seen yet (first run of celebrations): nothing is celebrated.
+  assert.deepEqual(core.newFirsts(null, { ...seen, left: true }), []);
+  for (const k of core.FIRSTS) assert.ok(core.FIRST_GLYPHS[k], k);
+});
+
+test('walk headline picks the best true thing', () => {
+  const past = [{ km: 3, newCells: 20 }, { km: 1, newCells: 4 }];
+  assert.equal(core.walkHeadline({ km: 1, newCells: 3, points: 3 }, []).text, 'Your first walk · 3 new hexes');
+  assert.equal(core.walkHeadline({ km: 1, newCells: 31, points: 40 }, past).text, '31 new hexes · your most in one walk');
+  assert.equal(core.walkHeadline({ km: 4.2, newCells: 2, points: 9 }, past).text, 'Your longest walk yet · 2 new hexes');
+  assert.equal(core.walkHeadline({ km: 1, newCells: 1, points: 2 }, past, 3).text, '1 new hex · 3 days in a row');
+  assert.equal(core.walkHeadline({ km: 1, newCells: 6, points: 7 }, past).text, '6 new hexes');
+  assert.equal(core.walkHeadline({ km: 1, newCells: 0, points: 2 }, past).text, 'Your map, warmed back up');
+  const quiet = core.walkHeadline({ km: 0.2, newCells: 0, points: 0 }, past);
+  assert.deepEqual(quiet, { text: 'Walk saved', big: false });
+});

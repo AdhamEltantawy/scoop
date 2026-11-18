@@ -945,8 +945,10 @@
     const summary = { start: walk.start, end: Date.now(), km: +walk.km.toFixed(3), newCells: walk.newCells.size };
     const warmed = [...walk.cells.keys()].filter((c) => !walk.newCells.has(c)).length;
     const walkCells = [...walk.cells.keys()];
+    const newCellList = [...walk.newCells];
     summary.points = countVisits();
     const saved = summary.km > 0 || summary.newCells > 0 || summary.points > 0;
+    const past = walks.slice();
     if (saved) walks.push(summary);
     walk = null;
     clearInterval(ticker);
@@ -971,34 +973,82 @@
       return;
     }
     const fresh = [...earnedBadges()].filter((k) => !badgesBefore.has(k));
-    showSummary(summary, warmed, fresh);
+    const streak = core.streaks(walks.map((x) => x.start)).current;
+    showSummary(summary, warmed, fresh, { headline: core.walkHeadline(summary, past, streak), newCells: newCellList });
   }
 
-  function showSummary(w, warmed, freshBadges) {
+  function showSummary(w, warmed, freshBadges, { headline = { text: 'Walk saved', big: false }, newCells = [] } = {}) {
     const dur = clock(w.end - w.start);
     const when = new Date(w.end).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
-    const row = (sw, label, value) => el('div', { class: 'sum-row' }, el('span', {}, sw, label), el('b', {}, value));
+    const row = (sw, label, value) => el('div', { class: 'sum-row' }, el('span', {}, sw, label), value);
     const badge = freshBadges.length ? core.BADGES[freshBadges[0]] : null;
+    const big = headline.big;
+    const kmEl = el('span', {}, w.km.toFixed(2));
+    const ptsEl = el('span', { class: 'pill' }, `+${Math.round(w.points).toLocaleString()} pts`);
+    const newEl = el('b', {}, w.newCells.toLocaleString());
+    const warmEl = el('b', {}, warmed.toLocaleString());
+    const badgeEl = badge ? el('div', { class: big ? 'new-badge cel-later' : 'new-badge' },
+          el('div', { class: 'hex-badge hot' }, badge.glyph),
+          el('div', {}, el('b', {}, `New badge: ${badge.label}`), el('small', {}, badge.desc))) : null;
     fillEl($('summaryBody'),
       el('div', { class: 'stack' },
         el('div', { class: 'summary-top' },
           el('div', { class: 'stack tight', style: 'gap:2px' },
             el('span', { class: 'when' }, `Walk saved · ${when}`),
-            el('span', { class: 'summary-km' }, w.km.toFixed(2), el('small', {}, 'km'))),
-          el('span', { class: 'pill' }, `+${Math.round(w.points).toLocaleString()} pts`)),
+            big ? el('span', { class: 'summary-headline' }, headline.text) : null,
+            el('span', { class: 'summary-km' }, kmEl, el('small', {}, 'km'))),
+          ptsEl),
         el('div', { class: 'sum-rows' },
-          row(el('span', { class: 'hex-sw', style: `background:${HEAT_BANDS[0].color}` }), 'New hexes', w.newCells.toLocaleString()),
-          row(el('span', { class: 'hex-sw', style: `background:${HEAT_BANDS[2].color}` }), 'Warmed back up', warmed.toLocaleString()),
-          row(el('span', { class: 'ring-sw' }), 'Time', dur)),
-        badge ? el('div', { class: 'new-badge' },
-          el('div', { class: 'hex-badge hot' }, badge.glyph),
-          el('div', {}, el('b', {}, `New badge: ${badge.label}`), el('small', {}, badge.desc))) : null,
+          row(el('span', { class: 'hex-sw', style: `background:${HEAT_BANDS[0].color}` }), 'New hexes', newEl),
+          row(el('span', { class: 'hex-sw', style: `background:${HEAT_BANDS[2].color}` }), 'Warmed back up', warmEl),
+          row(el('span', { class: 'ring-sw' }), 'Time', el('b', {}, dur))),
+        badgeEl,
         // Filled by the community layer: the welcome to your neighbourhood after a first walk.
         el('div', { id: 'summaryExtra' }),
         reminderOffer(),
         el('button', { class: 'btn', id: 'summaryDone', onclick: closeSheet }, 'Done')));
     openSheet('summarySheet');
-    emit('summary', { walk: w, first: walks.length === 1 });
+    emit('summary', { walk: w, first: walks.length === 1, big });
+    if (big) celebrateWalk({ w, warmed, kmEl, ptsEl, newEl, warmEl, badgeEl, newCells });
+  }
+
+  /** The summary's celebration: numbers count up, hexes burst, the new hexes flash on the map. */
+  function celebrateWalk({ w, warmed, kmEl, ptsEl, newEl, warmEl, badgeEl, newCells }) {
+    const C = window.scoopCelebrate;
+    if (!C) return;
+    const later = (ms, fn) => setTimeout(fn, C.reduced() ? 0 : ms);
+    flashCells(newCells);
+    later(300, () => {
+      C.countUp(kmEl, w.km, { format: (v) => v.toFixed(2) });
+      C.countUp(newEl, w.newCells);
+      C.countUp(warmEl, warmed);
+      C.countUp(ptsEl, Math.round(w.points), { ms: 1100, format: (v) => `+${Math.round(v).toLocaleString()} pts` });
+      const r = $('summarySheet').getBoundingClientRect();
+      C.burst({ x: innerWidth / 2, y: r.top + 40, count: Math.min(90, 40 + w.newCells * 2) });
+      C.buzz([30, 50, 30]);
+    });
+    later(1450, () => ptsEl.classList.add('cel-bump'));
+    if (badgeEl) later(1650, () => { badgeEl.classList.remove('cel-later'); badgeEl.classList.add('cel-in'); C.buzz(40); });
+  }
+
+  /** The walk's new hexes glow once on the map, then settle into their heat colour. */
+  let flashLayer = null;
+  function flashCells(cells) {
+    if (!cells.length || (window.scoopCelebrate && window.scoopCelebrate.reduced())) return;
+    if (flashLayer) map.removeLayer(flashLayer);
+    const poly = hexLayer(cells, { pane: 'walk', color: '#FFE3A3', weight: 3, opacity: 0, fillColor: '#FFE3A3', fillOpacity: 0, interactive: false });
+    flashLayer = poly.addTo(map);
+    const t0 = performance.now();
+    const ms = 1800;
+    const tick = (t) => {
+      if (flashLayer !== poly) return;
+      const k = Math.min(1, (t - t0) / ms);
+      const a = Math.sin(k * Math.PI) * (k < 0.5 ? 1 : 1 - (k - 0.5) * 0.6);
+      poly.setStyle({ opacity: a, fillOpacity: a * 0.75 });
+      if (k < 1) requestAnimationFrame(tick);
+      else { map.removeLayer(poly); flashLayer = null; }
+    };
+    requestAnimationFrame(tick);
   }
 
   // ---------- walk reminders (Android app) ----------
@@ -1584,6 +1634,7 @@
   // background (instead of quitting) so a walk in progress keeps recording.
   if (App) {
     App.addListener('backButton', () => {
+      if (window.scoopCelebrate && window.scoopCelebrate.closeMoment()) return;
       if (backOverride) backOverride();
       else if (dialogDone) dialogDone(null);
       else if (anySheetOpen()) closeSheet();

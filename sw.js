@@ -1,12 +1,13 @@
 // Offline support: the app shell is cached; map tiles come from the network
 // (the browser's normal HTTP cache keeps recently viewed tiles).
-const CACHE = 'scoop-shell-v18';
+const CACHE = 'scoop-shell-v19';
 const SHELL = [
   './',
   'index.html',
   'tokens.css',
   'style.css',
   'app.js',
+  'celebrate.js',
   'config.js',
   'social-core.js',
   'areas.js',

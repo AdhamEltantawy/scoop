@@ -949,6 +949,110 @@ body.home-on[data-phase="idle"] .compare-bar { top: calc(var(--top) + 192px); }
 .your-landmark > div { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .your-landmark small { font-size: 12px; color: var(--muted); }
 
+/* ---------- celebrations (celebrate.js) ---------- */
+.celebrate-fx { position: fixed; inset: 0; width: 100vw; height: 100vh; pointer-events: none; z-index: 2500; }
+
+/* Walk summary: the headline, the bump on the points, the badge spinning in */
+.summary-headline { font: 800 21px/1.15 var(--font-display); letter-spacing: -.01em; text-wrap: balance; margin-top: 2px; }
+.summary-km, .sum-row b, .pill { font-variant-numeric: tabular-nums; }
+.cel-bump { animation: cel-bump .5s var(--ease-sheet); }
+.cel-later { visibility: hidden; }
+.cel-in { animation: pop .45s var(--ease-sheet) both; }
+.new-badge.cel-in .hex-badge { position: relative; overflow: hidden; animation: cel-spin-in .6s var(--ease-sheet) both .1s; }
+.new-badge.cel-in .hex-badge::after {
+  content: ""; position: absolute; inset: -20%;
+  background: linear-gradient(110deg, transparent 40%, rgba(255,255,255,.65) 50%, transparent 60%);
+  transform: translateX(-100%); animation: cel-shine 1s ease-out .6s forwards;
+}
+
+/* Hex progress steps: one per neighbourhood first */
+.cel-steps { display: grid; grid-template-columns: repeat(6, 1fr); gap: 6px; }
+.cel-step {
+  height: 34px; display: flex; align-items: center; justify-content: center; font-size: 15px;
+  clip-path: polygon(50% 0, 100% 25%, 100% 75%, 50% 100%, 0 75%, 0 25%);
+  background: var(--surface-2); color: var(--muted);
+}
+.cel-step.on { background: var(--accent); color: var(--on-accent); }
+.cel-step.fresh { animation: cel-fill .7s var(--ease-sheet) both .35s; }
+.cel-steps.sm .cel-step { height: 22px; font-size: 11px; }
+.cel-steps.all { max-width: 240px; margin: 4px auto 0; }
+.cel-steps.all .cel-step { height: 28px; animation: cel-fill .5s var(--ease-sheet) both; }
+.cel-steps.all .cel-step:nth-child(1) { animation-delay: .5s; }
+.cel-steps.all .cel-step:nth-child(2) { animation-delay: .62s; }
+.cel-steps.all .cel-step:nth-child(3) { animation-delay: .74s; }
+.cel-steps.all .cel-step:nth-child(4) { animation-delay: .86s; }
+.cel-steps.all .cel-step:nth-child(5) { animation-delay: .98s; }
+.cel-steps.all .cel-step:nth-child(6) { animation-delay: 1.1s; }
+
+/* "A step closer to local" on the walk summary */
+.cel-local {
+  display: flex; flex-direction: column; gap: 10px; width: 100%; text-align: left;
+  padding: 14px; border-radius: var(--r-tile); border: 1.5px solid var(--accent);
+  background: var(--surface); color: var(--ink); font: inherit; cursor: pointer;
+}
+.cel-local-top { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; }
+.cel-local-top b { font: 700 16px var(--font-display); }
+.cel-local-top span { font: 700 15px var(--font-display); color: var(--accent-ink); font-variant-numeric: tabular-nums; }
+.cel-local-what { font-size: 14px; }
+.cel-local-what em { font-style: normal; font-weight: 700; color: var(--accent-ink); }
+
+/* Banner over the map, under the stats card */
+.cel-banner {
+  position: fixed; left: 14px; right: 14px; top: calc(var(--top) + 96px);
+  max-width: 492px; margin: 0 auto; z-index: 1400;
+  display: flex; flex-direction: column; gap: 10px; padding: 12px 14px;
+  border-radius: var(--r-card); border: 2px solid var(--accent);
+  background: var(--surface); color: var(--ink); box-shadow: 0 10px 30px rgba(0,0,0,.2);
+  transform: translateY(-24px); opacity: 0; transition: transform .4s var(--ease-sheet), opacity .3s;
+}
+.cel-banner.on { transform: none; opacity: 1; }
+.cel-banner-top { display: flex; align-items: center; gap: 10px; }
+.cel-banner-text { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.cel-banner-text b { font: 700 15px var(--font-display); }
+.cel-banner-text small { font-size: 13px; color: var(--muted); }
+.cel-hex-icon {
+  flex: none; width: 36px; height: 40px; display: flex; align-items: center; justify-content: center; font-size: 17px;
+  clip-path: polygon(50% 0, 100% 25%, 100% 75%, 50% 100%, 0 75%, 0 25%); background: var(--tint);
+}
+.cel-float {
+  position: fixed; z-index: 2500; pointer-events: none; transform: translateX(-50%);
+  font: 800 20px var(--font-display); color: var(--accent-ink); text-shadow: 0 1px 0 var(--surface);
+  animation: cel-float 1.4s var(--ease-sheet) forwards;
+}
+
+/* "You're a local": the full-screen moment */
+.cel-moment {
+  position: fixed; inset: 0; z-index: 2400;
+  display: flex; align-items: center; justify-content: center; text-align: center;
+  padding: max(24px, env(safe-area-inset-top)) 24px max(24px, env(safe-area-inset-bottom));
+  background: radial-gradient(circle at 50% 36%, var(--tint), transparent 70%), var(--bg);
+  opacity: 0; transition: opacity .35s;
+}
+.cel-moment.on { opacity: 1; }
+.cel-moment-card { width: 100%; max-width: 360px; display: flex; flex-direction: column; gap: 8px; }
+.cel-emblem { position: relative; width: 150px; height: 170px; margin: 0 auto 12px; }
+.cel-emblem-ring, .cel-emblem-core { position: absolute; clip-path: polygon(50% 0, 100% 25%, 100% 75%, 50% 100%, 0 75%, 0 25%); }
+.cel-emblem-ring { inset: 0; background: conic-gradient(var(--heat-0), var(--heat-1), var(--heat-2), var(--heat-1), var(--heat-0)); }
+.cel-emblem-core { inset: 9px; background: var(--surface); display: flex; align-items: center; justify-content: center; }
+.cel-emblem-core strong { display: block; font-size: 46px; line-height: 1; margin-bottom: 4px; }
+.cel-emblem-core span { font: 800 13px var(--font-display); letter-spacing: .14em; text-transform: uppercase; color: var(--accent-ink); }
+.cel-moment.on .cel-emblem { animation: cel-emblem 1s var(--ease-sheet) both; }
+.cel-kicker { font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spacing: .1em; }
+.cel-title { margin: 0; font: 800 32px/1.05 var(--font-display); letter-spacing: -.02em; color: var(--ink); text-wrap: balance; }
+.cel-sub { margin: 0 auto 8px; max-width: 30ch; font-size: 14px; color: var(--muted); }
+.cel-actions { display: flex; flex-direction: column; gap: 8px; width: 100%; max-width: 280px; margin: 14px auto 0; }
+
+@keyframes cel-bump { 0% { transform: scale(1); } 40% { transform: scale(1.18); } 100% { transform: scale(1); } }
+@keyframes cel-spin-in { from { transform: rotate(-120deg) scale(.3); } to { transform: none; } }
+@keyframes cel-shine { to { transform: translateX(100%); } }
+@keyframes cel-fill {
+  0% { background: var(--surface-2); color: var(--muted); transform: scale(1); }
+  50% { transform: scale(1.35); }
+  100% { background: var(--accent); color: var(--on-accent); transform: scale(1); }
+}
+@keyframes cel-float { from { opacity: 1; transform: translate(-50%, 0); } to { opacity: 0; transform: translate(-50%, -60px); } }
+@keyframes cel-emblem { 0% { transform: scale(.2) rotate(-90deg); opacity: 0; } 70% { transform: scale(1.08) rotate(6deg); opacity: 1; } 100% { transform: none; } }
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; }
 }
