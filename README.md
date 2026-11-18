@@ -45,6 +45,15 @@ explored yet.
   30 min, and it stays quiet for 30 min after a walk ends.
 - **Walk summary**: distance, points, new hexes, hexes warmed back up, time
   and any badge you just earned.
+- **Celebrations**: a walk with something new gets a headline (your most new
+  hexes in one walk, your longest walk yet, days in a row), its numbers count
+  up, its new hexes glow on the map and a burst of hexes in the heat colours
+  goes up. Leaving or finding a landmark, or a check-in, bursts from your dot.
+  Each neighbourhood first you complete fills in a step on a six-hex progress
+  row (on the summary, or in a banner over the map), and the sixth gets a
+  full-screen *You're a local*, once (during a walk it waits for the summary).
+  Phones buzz briefly. With reduced motion on, you get the cards and final
+  numbers without the movement.
 - **Trends**: new hexes, points or distance per day, week or month. Private:
   worked out on your device.
 - **Unexplored grid**: an outline of the hexes you haven't visited yet.
@@ -250,6 +259,7 @@ location to web apps once the screen locks.
 | --- | --- |
 | `index.html`, `style.css`, `tokens.css` | UI: the map plus bottom sheets. Colours, type, radii and motion live in `tokens.css` (Ember & Nile, light and dark) |
 | `app.js` | Map, H3 logic, GPS tracking, storage |
+| `celebrate.js` | Celebrations: hex burst, count-ups, banner and the full-screen moment |
 | `social-core.js` | Pure helpers: heat and scores, edge band, areas, trends (unit tested) |
 | `areas.js` | Official country / city / district lookup (OpenStreetMap via Overpass) |
 | `districts.geojson` | Scoop's own district outlines where OSM has none; edit on geojson.io, ids `r9` + 11 digits |
