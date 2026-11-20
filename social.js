@@ -1445,10 +1445,7 @@
       const b = map.getBounds().pad(0.2);
       let cells8 = [];
       try {
-        cells8 = h3.polygonToCells([
-          [b.getSouth(), b.getWest()], [b.getNorth(), b.getWest()],
-          [b.getNorth(), b.getEast()], [b.getSouth(), b.getEast()],
-        ], 8, true);
+        cells8 = core.boxCells(h3, b.getSouth(), b.getWest(), b.getNorth(), b.getEast(), 8);
       } catch (e) {
         return;
       }

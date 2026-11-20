@@ -548,6 +548,15 @@
     return a !== null && b !== null && b > a;
   }
 
+  /**
+   * The H3 cells covering a lat/lng box at `res`. The points go in as
+   * [lat, lng] with isGeoJson false: passing true reads them as [lng, lat]
+   * and asks about the mirror-image place (Cairo becomes the sea off Alexandria).
+   */
+  function boxCells(h3, south, west, north, east, res) {
+    return h3.polygonToCells([[south, west], [north, west], [north, east], [south, east]], res, false);
+  }
+
   /** A district's weekly warmth goal, in %. Keep in sync with warmth_goal(). */
   const WARMTH_GOAL = 50;
 
@@ -649,6 +658,6 @@
     landmarksToAlert, landmarkRating, pruneAlerted, ordinal,
     FIRSTS, FIRST_GLYPHS, newFirsts, walkHeadline, NEAR_METERS, WARMTH_GOAL, firstsDone, nextFirst, pickWelcome, walkDistance,
     WEEKDAYS, CHECK_IN_BEFORE_MS, CHECK_IN_AFTER_MS, circleSchedule, nameList, whoIsIn, walkWhen, checkInOpen, togetherHexes,
-    parseCircleInvite, releaseNumber, updateAvailable,
+    parseCircleInvite, releaseNumber, updateAvailable, boxCells,
   };
 });
