@@ -1422,6 +1422,12 @@
   /** @type {Map<string, {heat:number, explorers:number, mine:boolean, first_username:string|null}>} */
   let communityCells = new Map();
   let communityTimer = null;
+  let communitySeq = 0;
+  let communityTooWide = false;
+  // community_heat() takes at most 60 blocks (~0.7 km² each) a call. A desktop
+  // window at street zoom covers more, so ask in chunks, up to a screenful.
+  const COMMUNITY_CHUNK = 60;
+  const COMMUNITY_MAX_BLOCKS = 240;
 
   function drawCommunity() {
     clearTimeout(communityTimer);
@@ -1446,13 +1452,25 @@
       } catch (e) {
         return;
       }
-      if (!cells8.length || cells8.length > 60) return;
+      if (!cells8.length) return;
+      if (cells8.length > COMMUNITY_MAX_BLOCKS) {
+        communityLayer.clearLayers();
+        communityKey = '';
+        if (!communityTooWide) { communityTooWide = true; toast('Zoom in to see everyone’s hexes'); }
+        return;
+      }
+      communityTooWide = false;
       const key = cells8.sort().join();
       if (key === communityKey) return;
       communityKey = key;
+      const seq = ++communitySeq;
       try {
         // Every hex anyone walked, as warm as the district number counts it.
-        const rows = check(await sb.rpc('community_heat', { cells8 })).filter((r) => r.heat >= 0.03);
+        const chunks = [];
+        for (let i = 0; i < cells8.length; i += COMMUNITY_CHUNK) chunks.push(cells8.slice(i, i + COMMUNITY_CHUNK));
+        const rows = (await Promise.all(chunks.map((c) => sb.rpc('community_heat', { cells8: c }).then(check))))
+          .flat().filter((r) => r.heat >= 0.03);
+        if (seq !== communitySeq) return; // the map moved on while this was loading
         communityCells = new Map(rows.map((r) => [r.cell, r]));
         communityLayer.clearLayers();
         for (const r of rows) {
