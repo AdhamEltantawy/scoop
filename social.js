@@ -1471,9 +1471,10 @@
         communityCells = new Map(rows.map((r) => [r.cell, r]));
         communityLayer.clearLayers();
         for (const r of rows) {
+          const band = S.COMMUNITY_BANDS.find((x) => r.heat >= x.min) || S.COMMUNITY_BANDS[S.COMMUNITY_BANDS.length - 1];
           L.polygon(h3.cellToBoundary(r.cell), {
             pane: 'community', stroke: false, interactive: false,
-            fillColor: S.COLORS.community, fillOpacity: 0.08 + 0.57 * r.heat,
+            fillColor: band.color, fillOpacity: band.fill,
           }).addTo(communityLayer);
         }
       } catch (err) {

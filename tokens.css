@@ -47,7 +47,11 @@
   /* Map — other layers */
   --walk: #DD4420; --walk-stroke: #2B62E8; --walk-opacity: .85; --walk-stroke-width: 2.4; /* this walk: ember, outlined as yours */
   --friend-overlay: #12805C; --friend-overlay-opacity: .14; --friend-overlay-stroke-width: 2.4;
-  --community: #EC6C34;         /* everyone's warmth, under your own hexes */
+  /* Everyone's warmth, under your own hexes: violet so it never reads as yours. */
+  --community-0: #6D28D9; --community-0-opacity: .60;   /* walked in the last ~12 days */
+  --community-1: #8B5CF6; --community-1-opacity: .50;   /* ~1 month */
+  --community-2: #B39DF3; --community-2-opacity: .40;   /* ~2 months */
+  --community-3: #D9D0F0; --community-3-opacity: .30;   /* older */
   --privacy: #5C6470; --privacy-stroke: #3A4048; --privacy-opacity: .12; /* dash 6 5 */
   --grid: #1A1A1A; --grid-opacity: .28; --grid-width: .8;   /* on satellite: #FFFFFF @ .35 */
   --location: #2B62E8;          /* you: dot r8 + 3px white ring; accuracy @ .16 fill */
@@ -76,5 +80,6 @@
     --danger: #FF7A86; --danger-tint: #FF7A8626;
     --warning: #F2B85A; --warning-bg: #2E2516;
     --walk-stroke: #7C9CFF; --location: #7C9CFF; --friend-overlay: #4CC79A;
+    --community-0: #A78BFA; --community-1: #8B5CF6; --community-2: #6D4FC2; --community-3: #4C3D7A;
   }
 }
