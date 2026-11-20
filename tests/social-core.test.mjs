@@ -440,3 +440,14 @@ test('walk headline picks the best true thing', () => {
   const quiet = core.walkHeadline({ km: 0.2, newCells: 0, points: 0 }, past);
   assert.deepEqual(quiet, { text: 'Walk saved', big: false });
 });
+
+test('the community map asks about the blocks you are looking at', () => {
+  const [lat, lng] = [30.06, 31.33]; // Nasr City
+  const cells = core.boxCells(h3, lat - 0.01, lng - 0.01, lat + 0.01, lng + 0.01, 8);
+  assert.ok(cells.length > 0);
+  assert.ok(cells.includes(h3.latLngToCell(lat, lng, 8)), 'covers the middle of the view');
+  for (const c of cells) {
+    const [clat, clng] = h3.cellToLatLng(c);
+    assert.ok(Math.abs(clat - lat) < 0.02 && Math.abs(clng - lng) < 0.02, 'nowhere else');
+  }
+});
