@@ -274,7 +274,7 @@ the walk ends they become ember (just walked).
 | Layer | Look | When visible |
 | --- | --- | --- |
 | Basemap | OSM (default), Esri streets, Humanitarian, Satellite | Always; picked in Settings |
-| Community map | `--community` fills, no stroke, opacity 0.08 + 0.57 × heat; every hex anyone walked, fading as it cools (hidden under 3% heat) | Signed in, toggled on in Settings, zoom ≥ 14 |
+| Community map | Violet heat bands `--community-0`…`-3` (heat ≥ .75 / .5 / .25 / older), no stroke; every hex anyone walked, so it never reads as yours (hidden under 3% heat) | Signed in, toggled on in Settings, zoom ≥ 14 |
 | Privacy zones | Grey dashed circle (dash 6 5), 12% fill | Only after "Show on map" or adding a zone |
 | Unexplored grid | Thin dark hex outlines (white on satellite) | Toggle on (default), zoom ≥ 12, not too many hexes in view |
 | Explored hexes | Five heat bands (below) | Always |
@@ -845,7 +845,7 @@ Name: **2c, "warmth is the brand"** (was Ember & Nile until the belonging flow).
 | `--heat-0…4` | see §7 | Explored hexes |
 | `--walk` / `--walk-stroke` | `#DD4420` / `#2B62E8` (dark `#7C9CFF`), fill .85, stroke 2.4 | This walk: ember outlined as yours |
 | `--friend-overlay` | `#12805C` (dark `#4CC79A`), fill .14, stroke 2.4 | Compare |
-| `--community` | `#EC6C34` | Community map (also switched by the home card's district tab) |
+| `--community-0`…`-3` | `#6D28D9` `#8B5CF6` `#B39DF3` `#D9D0F0` (fill .60 / .50 / .40 / .30) | Community map by heat, violet so it never reads as yours (also switched by the home card's district tab) |
 | `--privacy` / `--privacy-stroke` | `#5C6470` / `#3A4048`, fill .12, dash 6 5 | Privacy zones |
 | `--grid` | `#1A1A1A` @ .28, 0.8px (white @ .35 on satellite) | Unexplored grid |
 | `--location` | `#2B62E8` (dark `#7C9CFF`), accuracy fill .16 | Position dot |

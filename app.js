@@ -38,7 +38,6 @@
     friend: tok('--friend-overlay', '#3355E0'),
     privacy: tok('--privacy', '#5C6470'),
     privacyStroke: tok('--privacy-stroke', '#3A4048'),
-    community: tok('--community', '#8A4FC7'),
   };
 
   // Explored hexes are drawn in heat bands, from just walked to long ago. Each
@@ -52,6 +51,13 @@
     name: ['Now', '1 mo', '2 mo', '3 mo', '100d+'][i],
   }));
   const heatBand = (h) => HEAT_BANDS.findIndex((b) => h >= b.min);
+  // Other people's hexes on the community map: the same heat steps in violet,
+  // so they never look like yours. No stroke; the last band takes everything older.
+  const COMMUNITY_BANDS = [0.75, 0.5, 0.25, 0].map((min, i) => ({
+    min,
+    color: tok(`--community-${i}`, ['#6D28D9', '#8B5CF6', '#B39DF3', '#D9D0F0'][i]),
+    fill: Number(tok(`--community-${i}-opacity`, '')) || [0.6, 0.5, 0.4, 0.3][i],
+  }));
 
   // ---------- persistence ----------
 
@@ -1655,7 +1661,7 @@
 
   // Used by social.js (community features) and handy for debugging from the console.
   window.scoop = {
-    BASE_RES, COLORS, HEAT_BANDS, map, visited, visits, visitCount, lastSeen, walks, settings, isNative, Filesystem, Share, App, WalkReminder,
+    BASE_RES, COLORS, HEAT_BANDS, COMMUNITY_BANDS, map, visited, visits, visitCount, lastSeen, walks, settings, isNative, Filesystem, Share, App, WalkReminder,
     LocalNotifications,
     render, scheduleRender, toast, formatNum, cellAreaCached, haversine, openSheet, closeSheet, saveNow, emit,
     hexScoreTotal, hexLayer, confirmDialog, segmented, el, fill: fillEl, setIdentity, openMe, openSettings,
