@@ -592,7 +592,7 @@ the buttons (the active dot stretches to a 22px ember pill).
 
 | # | Title | Body | Visual | Buttons |
 | --- | --- | --- | --- | --- |
-| 1 | Every walk warms your neighbourhood | Each street-sized hex you walk lights up. Your neighbours are warming theirs too, and it all adds up on one shared map. | "scoop" wordmark in ember over the 5 heat-band hexes | Next |
+| 1 | Every walk warms your neighbourhood | Each street-sized hex you walk lights up. Your neighbours are warming theirs too, and together you warm up your district. | "scoop" wordmark in ember over the 5 heat-band hexes | Next |
 | 2 | Private by default | Your map lives on this phone. Scoop never draws or uploads your routes. Neighbours only ever see "an explorer", and friends are up to you. | Lock in a blue-tinted hexagon | Next |
 | 3 | Scoop needs your location while you walk | It lights up hexes and shows you what's nearby. Your location and routes stay on this phone; Scoop only looks up totals for your area. | Pin in a blue-tinted hexagon | Allow location · Not now |
 | — | Location is off | Scoop can't light up hexes without it. Allow location for this site in your browser settings (app: Settings → Apps → Scoop → Location), then come back. | — | Try again · Look around the map |
@@ -889,6 +889,14 @@ Panels and zone cards use 18px. The **hexagon clip-path** is a recurring shape
 | Status dots | `pulse` opacity 1 → .35, 1 s (GPS) / 1.4 s (recording) |
 | Progress bar | width, 250 ms linear |
 | Switches | 200 ms |
+| Hex burst (`celebrate.js`) | heat-colour hexagons on a full-screen canvas, ~1.5 s; 28 from your dot for a landmark or check-in, 40–90 on a walk summary, 140 + two side bursts for *You're a local* |
+| Count-up | summary numbers ease out from 0, 900 ms (points 1100 ms), starting 300 ms after the sheet |
+| New hexes glow | the walk's new hexes flash pale gold on the map, 1.8 s, then settle |
+| Badge reveal | `pop` + spin in from -120°, then a shine across the hex |
+| First step fills | the new hex step scales to 1.35 and turns ember, 700 ms |
+| Celebration banner | under the stats card, drops 24px + fade, 5 s, tap to dismiss |
+| *You're a local* | full screen; emblem scales and turns in, steps fill one by one 120 ms apart |
+| Haptics | `navigator.vibrate`: 30-50-30 ms on a summary, 40-40-60 on a small win, a long pattern for *You're a local* |
 
 `prefers-reduced-motion` turns all animation and transitions off.
 

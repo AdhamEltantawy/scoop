@@ -590,6 +590,7 @@
       }
     }
     if (S.currentSheet() === 'socialSheet') renderSocial();
+    seedFirsts();
     document.dispatchEvent(new CustomEvent('scoop:profile', { detail: { profile } }));
   }
 
@@ -1831,8 +1832,11 @@
           const row = check(await sb.from('checkins').select('met_with').eq('id', id).single());
           S.closeSheet();
           const k = core.CHECKIN_KINDS[checkinKind];
-          if (checkinKind !== 'meetup') toast(`${k.icon} Checked in · +${k.points} pts`);
-          else toast(row.met_with ? '🤝 Meetup verified · +5 pts' : '🤝 Checked in · waiting for a friend to check in here');
+          const checkMsg = checkinKind !== 'meetup' ? `${k.icon} Checked in · +${k.points} pts`
+            : row.met_with ? '🤝 Meetup verified · +5 pts' : '🤝 Checked in · waiting for a friend to check in here';
+          const earned = checkinKind !== 'meetup' ? k.points : row.met_with ? 5 : 0;
+          if (earned) smallWin(earned);
+          celebrateFirsts(checkMsg.replace(/^\S+ /, '')).then((shown) => { if (!shown) toast(checkMsg); });
           loadCheckinMarkers();
         } catch (err) {
           fail(err.code === '23505' ? new Error('You already checked in like that here today') : err);
@@ -2158,8 +2162,10 @@
         drawLandmarks();
         if (r.first_time) {
           justFound = true;
+          const foundMsg = `${kindOf(l).icon} Landmark found · +${core.LANDMARK_POINTS.found} pts · you're the ${core.ordinal(l.finds)} explorer to find it`;
           if (firstsCache) firstsCache.found = true;
-          toast(`${kindOf(l).icon} Landmark found · +${core.LANDMARK_POINTS.found} pts · you're the ${core.ordinal(l.finds)} explorer to find it`, 4000);
+          smallWin(core.LANDMARK_POINTS.found);
+          celebrateFirsts(`Landmark found · +${core.LANDMARK_POINTS.found} pts`).then((shown) => { if (!shown) toast(foundMsg, 4000); });
         }
       } catch (err) {
         if (/gone/.test(err.message)) {
@@ -2411,9 +2417,11 @@
             try {
               check(await sb.from('landmarks')
                 .insert({ cell, kind: landmarkKind, title: title.value.trim(), note: note.value.trim() || null, welcome: landmarkWelcome }));
-              toast(`${core.LANDMARK_KINDS[landmarkKind].icon} Landmark left · +${core.LANDMARK_POINTS.left} pts · ${landmarkWelcome
-                ? 'newcomers will be pointed to it' : 'explorers passing by will be told'}`, 4000);
+              const leftMsg = `${core.LANDMARK_KINDS[landmarkKind].icon} Landmark left · +${core.LANDMARK_POINTS.left} pts · ${landmarkWelcome
+                ? 'newcomers will be pointed to it' : 'explorers passing by will be told'}`;
               if (firstsCache) firstsCache.left = true;
+              smallWin(core.LANDMARK_POINTS.left);
+              celebrateFirsts(`Landmark left · +${core.LANDMARK_POINTS.left} pts`).then((shown) => { if (!shown) toast(leftMsg, 4000); });
               landmarkKind = null;
               landmarkWelcome = true;
               reloadLandmarks();
@@ -2590,15 +2598,134 @@
         const [r] = check(await sb.rpc('my_firsts'));
         Object.assign(s, {
           walked: s.walked || r.walked, home: r.home || null, homeName: r.home_name || null,
-          found: r.found, met: r.met, coffee: r.coffee, left: r.left_one,
+          found: r.found, met: r.met, coffee: r.coffee, left: r.left_one, ok: true,
         });
       } catch (err) {
         if (firstsCache && firstsCache.signedIn) return firstsCache; // offline: keep what we knew
       }
     }
     s.signedIn = !!profile;
+    if (!profile) s.ok = true;
     firstsCache = s;
     return s;
+  }
+
+  // ---------- celebrating firsts ----------
+
+  // What was done the last time we celebrated (per account), so each first is
+  // celebrated once, whichever device or friend completed it.
+  const FIRSTS_SEEN_KEY = 'scoop.firstsSeen.v1';
+  const seenKey = () => `${FIRSTS_SEEN_KEY}:${uid() || 'anon'}`;
+  const pickFirsts = (s) => Object.fromEntries(core.FIRSTS.map((k) => [k, !!s[k]]));
+  /** Became a local mid-walk: the full moment waits for the walk summary. */
+  let localPending = null;
+
+  /** Remember what's already done without celebrating it (new install, new device, new account). */
+  async function seedFirsts() {
+    if (loadJSON(seenKey(), null)) return;
+    const s = await loadFirsts().catch(() => null);
+    if (s && s.ok) saveJSON(seenKey(), pickFirsts(s));
+  }
+
+  /** Where your location dot is on screen, or the middle of the map. */
+  function dotOnScreen() {
+    const r = map.getContainer().getBoundingClientRect();
+    const pos = S.position();
+    const p = pos ? map.latLngToContainerPoint(pos.latlng) : { x: r.width / 2, y: r.height / 2 };
+    return { x: r.left + p.x, y: r.top + p.y };
+  }
+
+  /** A small win on the map: hexes burst from your dot and the points float up. */
+  function smallWin(points) {
+    const C = window.scoopCelebrate;
+    if (!C) return;
+    const { x, y } = dotOnScreen();
+    C.burst({ x, y, count: 28 });
+    if (points) C.floatText(`+${points}`, x + 10, y - 34);
+    C.buzz([40, 40, 60]);
+  }
+
+  /**
+   * After something that can complete a first: celebrate the firsts done since
+   * last time. On the walk summary it's a card; anywhere else a banner over
+   * the map; the sixth is the full-screen "You're a local" (after the walk,
+   * if you're walking). `what` is the action's own line ("Landmark left ·
+   * +3 pts"). Returns true if something was celebrated.
+   */
+  async function celebrateFirsts(what) {
+    const C = window.scoopCelebrate;
+    let s;
+    try {
+      s = await loadFirsts();
+    } catch (err) {
+      return false;
+    }
+    if (!C || !s || !s.ok) return false;
+    const seen = loadJSON(seenKey(), null);
+    saveJSON(seenKey(), pickFirsts(s));
+    const fresh = core.newFirsts(seen, s);
+    if (!fresh.length) return false;
+    const name = hoodName() || 'your neighbourhood';
+    const local = hoodName() ? `${name} local` : 'local';
+    const done = core.firstsDone(s);
+    const left = core.FIRSTS.length - done;
+    const freshAt = core.FIRSTS.indexOf(fresh[fresh.length - 1]);
+    const items = core.FIRSTS.map((k) => ({ ...core.FIRST_GLYPHS[k], on: !!s[k] }));
+    const label = core.FIRST_GLYPHS[fresh[fresh.length - 1]].label;
+    const next = core.nextFirst(s);
+    const inSummary = S.currentSheet() === 'summarySheet' && $('summaryExtra');
+
+    if (!next) {
+      if (S.walking()) {
+        localPending = name;
+        C.banner({ icon: '🏠', title: `You're a ${local}!`, sub: what || label, body: C.steps(items, freshAt, 'sm') });
+        C.buzz([60, 60, 60]);
+        return true;
+      }
+      setTimeout(() => showLocal(name), inSummary ? (C.reduced() ? 300 : 2600) : 0);
+      if (!inSummary) return true;
+    }
+
+    const togo = !next ? `You're a ${local}`
+      : left === 1 ? `One more first and you're a ${local}` : `${left} firsts from becoming a ${local}`;
+    if (inSummary) {
+      const nextLine = next ? firstItems(s, hoodName())[next] : null;
+      const card = h('button', { type: 'button', class: 'cel-local cel-later', onclick: openFirsts },
+        h('div', { class: 'cel-local-top' },
+          h('b', {}, next ? 'A step closer to local' : 'Local ✓'),
+          h('span', {}, `${done} / ${core.FIRSTS.length}`)),
+        C.steps(items, freshAt),
+        h('span', { class: 'cel-local-what', dir: 'auto' }, `${label}. `,
+          h('em', {}, togo), nextLine ? `: ${nextLine.t.charAt(0).toLowerCase()}${nextLine.t.slice(1)}` : null, '.'));
+      $('summaryExtra').before(card);
+      setTimeout(() => { card.classList.remove('cel-later'); card.classList.add('cel-in'); }, C.reduced() ? 0 : 2200);
+    } else {
+      C.banner({ icon: core.FIRST_GLYPHS[fresh[fresh.length - 1]].glyph, title: what || label, sub: togo, body: C.steps(items, freshAt, 'sm') });
+    }
+    return true;
+  }
+
+  /** The full-screen moment: you've done all six firsts. */
+  function showLocal(name) {
+    const C = window.scoopCelebrate;
+    localPending = null;
+    const named = name && name !== 'your neighbourhood';
+    const items = core.FIRSTS.map((k) => ({ ...core.FIRST_GLYPHS[k], on: true }));
+    C.moment({
+      emblem: '🏠',
+      emblemLabel: 'Local',
+      kicker: `${named ? `${name} · ` : ''}6 of 6 firsts`,
+      title: named ? `You're a ${name} local` : 'You’re a local',
+      sub: 'You walked it, made it home, found a neighbour’s landmark, walked with someone, had a coffee and left a landmark of your own.',
+      body: C.steps(items, -1, 'all'),
+      actions: [{ label: 'Share my map', primary: true, onclick: () => shareCard() }, { label: 'Done' }],
+    });
+    C.buzz([60, 60, 60, 60, 160]);
+    if (!C.reduced()) {
+      setTimeout(() => C.burst({ x: innerWidth / 2, y: innerHeight * 0.3, count: 140, big: true }), 450);
+      setTimeout(() => C.burst({ x: innerWidth * 0.25, y: innerHeight * 0.55, count: 50 }), 1100);
+      setTimeout(() => C.burst({ x: innerWidth * 0.75, y: innerHeight * 0.55, count: 50 }), 1350);
+    }
   }
 
   function goSignIn() {
@@ -2733,7 +2860,7 @@
     firstsCache = null;
     await Promise.all([loadHomes(), loadFirsts()]);
     document.dispatchEvent(new CustomEvent('scoop:home', { detail: { id: r.id, name: r.name } }));
-    toast(`${r.name || d.name} is home`);
+    if (!(await celebrateFirsts(`${r.name || d.name} is home`))) toast(`${r.name || d.name} is home`);
   }
 
   /** The home district chooser, opened from the firsts or from Me. */
@@ -2831,6 +2958,15 @@
           },
         }, 'Make it home')));
     box.after(card);
+  });
+
+  // After a walk: the firsts it (or anything since) completed, and the local moment if it waited for the walk to end.
+  document.addEventListener('scoop:summary', async () => {
+    const pending = localPending;
+    const shown = await celebrateFirsts();
+    if (pending && !shown && S.currentSheet() === 'summarySheet') {
+      setTimeout(() => showLocal(pending), window.scoopCelebrate && window.scoopCelebrate.reduced() ? 300 : 2600);
+    }
   });
 
   // The first walk saved: a welcome to the neighbourhood, and where to go next.

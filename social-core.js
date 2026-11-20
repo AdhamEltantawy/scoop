@@ -488,6 +488,66 @@
     return FIRSTS.find((k) => !(state && state[k])) || null;
   }
 
+  /** A glyph and short name for each first, for the progress steps. */
+  const FIRST_GLYPHS = {
+    walked: { glyph: '🚶', label: 'First walk' },
+    home: { glyph: '🏠', label: 'Made it home' },
+    found: { glyph: '🔍', label: 'Found a landmark' },
+    met: { glyph: '🤝', label: 'Walked with someone' },
+    coffee: { glyph: '☕', label: 'Had a coffee' },
+    left: { glyph: '⚑', label: 'Left a landmark' },
+  };
+
+  /**
+   * Firsts done now that weren't in `seen` (the state last celebrated).
+   * With no `seen` yet nothing is new: what you'd already done before
+   * celebrations existed isn't celebrated out of the blue.
+   */
+  function newFirsts(seen, now) {
+    if (!seen || !now) return [];
+    return FIRSTS.filter((k) => now[k] && !seen[k]);
+  }
+
+  /**
+   * The headline for a walk summary: the best true thing about it.
+   * walk: { km, newCells, points }; past: earlier walks [{ km, newCells }];
+   * streak: days in a row including this walk.
+   * Returns { text, big } where big means it's worth a celebration.
+   */
+  function walkHeadline(walk, past = [], streak = 0) {
+    const n = walk.newCells || 0;
+    const hexes = `${n.toLocaleString()} new hex${n === 1 ? '' : 'es'}`;
+    if (!past.length) return { text: n ? `Your first walk · ${hexes}` : 'Your first walk', big: true };
+    const mostNew = Math.max(0, ...past.map((w) => w.newCells || 0));
+    const longest = Math.max(0, ...past.map((w) => w.km || 0));
+    if (n >= 5 && n > mostNew) return { text: `${hexes} · your most in one walk`, big: true };
+    if (walk.km >= 0.5 && walk.km > longest) return { text: n ? `Your longest walk yet · ${hexes}` : 'Your longest walk yet', big: true };
+    if (streak >= 2 && n) return { text: `${hexes} · ${streak} days in a row`, big: true };
+    if (streak >= 2) return { text: `${streak} days in a row`, big: true };
+    if (n) return { text: hexes, big: true };
+    if (walk.points >= 1) return { text: 'Your map, warmed back up', big: true };
+    return { text: 'Walk saved', big: false };
+  }
+
+  /**
+   * The build number inside a release tag or version name: "v1.0.42" and
+   * "1.0.42" are 42. CI numbers every build and names its release after it
+   * (see .github/workflows/android.yml). Null when there isn't one, or it's 0
+   * (a local build, which CI never produced).
+   */
+  function releaseNumber(name) {
+    const m = /^v?\d+\.\d+\.(\d+)$/.exec(String(name || '').trim());
+    const n = m ? Number(m[1]) : 0;
+    return n > 0 ? n : null;
+  }
+
+  /** Whether the latest release is newer than the installed version. False when either is unknown. */
+  function updateAvailable(installed, latestTag) {
+    const a = releaseNumber(installed);
+    const b = releaseNumber(latestTag);
+    return a !== null && b !== null && b > a;
+  }
+
   /** A district's weekly warmth goal, in %. Keep in sync with warmth_goal(). */
   const WARMTH_GOAL = 50;
 
@@ -587,8 +647,8 @@
     pickAreas, simplifyLine, inWays, waysBox, parseDistricts, districtAt, periodStart, trendBuckets,
     streaks, localBadges, compare, zoneFilter, cellSig, syncDelta, readyToUpload, mergeRemote, topPercent, chunk, validUsername, timeAgo, parseInvite,
     landmarksToAlert, landmarkRating, pruneAlerted, ordinal,
-    FIRSTS, NEAR_METERS, WARMTH_GOAL, firstsDone, nextFirst, pickWelcome, walkDistance,
+    FIRSTS, FIRST_GLYPHS, newFirsts, walkHeadline, NEAR_METERS, WARMTH_GOAL, firstsDone, nextFirst, pickWelcome, walkDistance,
     WEEKDAYS, CHECK_IN_BEFORE_MS, CHECK_IN_AFTER_MS, circleSchedule, nameList, whoIsIn, walkWhen, checkInOpen, togetherHexes,
-    parseCircleInvite,
+    parseCircleInvite, releaseNumber, updateAvailable,
   };
 });
