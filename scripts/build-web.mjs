@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const out = join(root, 'www');
-const files = ['index.html', 'tokens.css', 'style.css', 'app.js', 'celebrate.js', 'config.js', 'social-core.js', 'areas.js', 'districts.geojson', 'social.js', 'moderation.js', 'circles.js', 'home.js', 'gate.js', 'privacy.html', 'sw.js', 'manifest.webmanifest', 'icons', 'vendor'];
+const files = ['index.html', 'tokens.css', 'style.css', 'app.js', 'celebrate.js', 'config.js', 'social-core.js', 'areas.js', 'districts.geojson', 'social.js', 'moderation.js', 'circles.js', 'home.js', 'update.js', 'gate.js', 'privacy.html', 'sw.js', 'manifest.webmanifest', 'icons', 'vendor'];
 
 rmSync(out, { recursive: true, force: true });
 mkdirSync(out);

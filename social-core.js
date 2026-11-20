@@ -529,6 +529,25 @@
     return { text: 'Walk saved', big: false };
   }
 
+  /**
+   * The build number inside a release tag or version name: "v1.0.42" and
+   * "1.0.42" are 42. CI numbers every build and names its release after it
+   * (see .github/workflows/android.yml). Null when there isn't one, or it's 0
+   * (a local build, which CI never produced).
+   */
+  function releaseNumber(name) {
+    const m = /^v?\d+\.\d+\.(\d+)$/.exec(String(name || '').trim());
+    const n = m ? Number(m[1]) : 0;
+    return n > 0 ? n : null;
+  }
+
+  /** Whether the latest release is newer than the installed version. False when either is unknown. */
+  function updateAvailable(installed, latestTag) {
+    const a = releaseNumber(installed);
+    const b = releaseNumber(latestTag);
+    return a !== null && b !== null && b > a;
+  }
+
   /** A district's weekly warmth goal, in %. Keep in sync with warmth_goal(). */
   const WARMTH_GOAL = 80;
 
@@ -630,6 +649,6 @@
     landmarksToAlert, landmarkRating, pruneAlerted, ordinal,
     FIRSTS, FIRST_GLYPHS, newFirsts, walkHeadline, NEAR_METERS, WARMTH_GOAL, firstsDone, nextFirst, pickWelcome, walkDistance,
     WEEKDAYS, CHECK_IN_BEFORE_MS, CHECK_IN_AFTER_MS, circleSchedule, nameList, whoIsIn, walkWhen, checkInOpen, togetherHexes,
-    parseCircleInvite,
+    parseCircleInvite, releaseNumber, updateAvailable,
   };
 });
