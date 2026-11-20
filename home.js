@@ -86,11 +86,22 @@
     if (pts.length) S.map.fitBounds(L.latLngBounds(pts).pad(0.3), { maxZoom: 17 });
   }
 
+  /**
+   * The map follows the tab: the district tab shows everyone's warmth. Told
+   * only when it changes, since the map redraws every time it's told.
+   */
+  let communityApplied = null;
+  function syncCommunity() {
+    const want = face === 'place';
+    if (communityApplied === want) return;
+    communityApplied = want;
+    kit.setCommunity(want);
+  }
+
   function setFace(f) {
     face = f;
     try { localStorage.setItem(FACE_KEY, f); } catch (e) { /* fine */ }
-    // The map follows: the district tab shows everyone's warmth you can see.
-    kit.setCommunity(f === 'place');
+    syncCommunity();
     render();
   }
 
@@ -173,6 +184,7 @@
     }
     const c = circles()[0] || null;
     if (face === 'people' && !c) face = 'place';
+    syncCommunity(); // the tab you opened on is already showing: so should its map layer
     const tab = (f, label, cls) => h('button', {
       type: 'button', class: `home-tab ${cls}`, 'aria-pressed': String(face === f), onclick: () => setFace(f),
     }, h('span', { class: 'dot', 'aria-hidden': 'true' }), h('span', { dir: 'auto' }, label));
