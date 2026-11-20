@@ -1197,7 +1197,7 @@
    * Centred confirmation for destructive actions. Resolves 'confirm', 'extra'
    * (the optional safer action, e.g. export first) or null when cancelled.
    */
-  function confirmDialog({ title, body, confirm, extra }) {
+  function confirmDialog({ title, body, confirm, extra, tone = 'danger', cancel = 'Cancel' }) {
     if (dialogDone) dialogDone(null);
     $('dialogTitle').textContent = title;
     $('dialogBody').textContent = body;
@@ -1210,8 +1210,8 @@
       dialogDone = finish;
       fillEl($('dialogActions'),
         extra ? el('button', { class: 'btn outline', onclick: () => finish('extra') }, extra) : null,
-        el('button', { class: 'btn danger', onclick: () => finish('confirm') }, confirm),
-        el('button', { class: 'btn ghost', onclick: () => finish(null) }, 'Cancel'));
+        el('button', { class: `btn ${tone}`, onclick: () => finish('confirm') }, confirm),
+        el('button', { class: 'btn ghost', onclick: () => finish(null) }, cancel));
       $('dialog').hidden = false;
       $('dialogActions').lastChild.focus();
     });

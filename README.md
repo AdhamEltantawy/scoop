@@ -182,6 +182,12 @@ Every push builds an installable APK with GitHub Actions
 you to allow installs from your browser. Newer APKs install over the old one
 and keep your data.
 
+**Updates:** the app checks the latest release when it opens (and when you come
+back to it, at most every 6 hours). If it's newer than the one you have, it says
+so and opens the release page; tap "Later" and it waits 3 days before asking
+about that version again. Builds made locally, rather than by CI, are never
+nagged. (`update.js`)
+
 The Android app keeps recording a walk with the screen off. It shows a
 notification while a walk is running. When asked, allow location access
 (*While using the app* is enough) and notifications.
