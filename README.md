@@ -135,8 +135,9 @@ Sign in with an emailed code to make Scoop social:
   your friends see who left one. Up to 25 out at once, three of yours per hex; none
   inside privacy zones. You're told about a landmark once every 12 hours at
   most, and only once you're well inside its hex.
-- **Community map**: street hexes explored by you and your friends, plus who
-  got there first.
+- **Community map**: every street hex anyone walked, shaded by how warm it still is
+  (the same heat the district card averages). Strangers show as a count, never a
+  name; your friends' names show, plus who got there first.
 - **Badges and streaks**: 12 badges, plus your current and best daily walking streak.
 
 What gets uploaded: hex ids with their first and last visit times, visit

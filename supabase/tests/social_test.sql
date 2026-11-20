@@ -272,6 +272,29 @@ select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-00000000000b
 select test.ok((select explorers from public.collective_map(array['883e6281bbfffff']) where cell = '8a3e6281ba1ffff') = 2,
   'community map counts friends exploring the same hex');
 
+-- The heat map shows everyone's hexes; only friends' names come with them.
+select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-00000000000c', false);
+select test.ok((select count(*) from public.community_heat(array['883e6281bbfffff'])) > 1,
+  'community heat: a stranger sees other people''s hexes too');
+select test.ok((select explorers = 2 and not mine and first_username is null and heat > 0 and heat <= 1
+    from public.community_heat(array['883e6281bbfffff']) where cell = '8a3e6281ba1ffff'),
+  'community heat: strangers count, and are not named');
+select test.ok((select mine and first_username is not null
+    from public.community_heat(array['883e6281bbfffff']) where cell = '8a3e6281ba0ffff'),
+  'community heat: your own hex is marked and named');
+select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-00000000000b', false);
+select test.ok((select mine and first_username is not null
+    from public.community_heat(array['883e6281bbfffff']) where cell = '8a3e6281ba1ffff'),
+  'community heat: a friend''s name comes through');
+select test.ok((select not mine and first_username is null
+    from public.community_heat(array['883e6281bbfffff']) where cell = '8a3e6281ba0ffff'),
+  'community heat: a stranger''s hex has no name');
+select test.throws($$ select * from public.community_heat(array(select '883e6281bbfffff' || i from generate_series(1, 61) i)) $$,
+  'community heat: zoom in');
+reset role;
+select test.ok(not has_function_privilege('anon', 'public.community_heat(text[])', 'execute'), 'community heat: signed in only');
+set role authenticated;
+
 -- ---------- challenges: percentile in your own district ----------
 select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-00000000000a', false);
 insert into public.challenges (title, starts_at, ends_at) values ('October', now() - interval '1 hour', now() + interval '7 days');
@@ -805,17 +828,29 @@ select set_config('realtime.topic', '', false);
 
 -- ---------- belonging: home, matchups, open challenges, reactions, invites ----------
 reset role;
+-- Two hexes cooled a while: one of alice's two months ago, one of dave's a month ago.
+update public.user_cells set first_visited = now() - interval '60 days', last_visited = now() - interval '60 days'
+  where cell = '8a3e6281baaffff' and user_id = '00000000-0000-0000-0000-00000000000a';
+update public.user_cells set first_visited = now() - interval '30 days', last_visited = now() - interval '30 days'
+  where cell = '8a3e6281bae7fff' and user_id = '00000000-0000-0000-0000-00000000000d';
 set role authenticated;
 select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-00000000000a', false);
 create temp table warmth as select * from public.district_warmth('r10');
 reset role;
-select test.ok((select w.hexes = (select count(distinct cell) from public.user_cells where district = 'r10')
-    and w.warm = (select count(*) from (select cell from public.user_cells where district = 'r10'
-      group by cell having max(last_visited) >= now() - interval '60 days') x)
-    and w.pct = round(100.0 * w.warm / w.hexes)
-    and w.mine_warm = (select count(*) from public.user_cells where user_id = '00000000-0000-0000-0000-00000000000a'
-      and district = 'r10' and last_visited >= now() - interval '60 days')
-    from warmth w), 'district warmth: hexes walked by anyone in the last 60 days, and yours');
+create temp table heats as select power(0.5, extract(epoch from now() - max(last_visited)) / (30 * 86400.0)) as heat
+  from public.user_cells where district = 'r10' group by cell;
+select test.ok((select w.hexes = (select count(*) from heats)
+    and w.warm = (select round(sum(heat)) from heats)
+    and w.pct = (select round(100 * avg(heat)) from heats)
+    and w.hexes = 6 and w.warm = 5 and w.pct = 79 -- (4 × 1 + 0.25 + 0.5) / 6
+    and w.mine_warm = 2 -- 1 + 0.25 + 1, rounded
+    from warmth w), 'district warmth: the average heat of its hexes, and the heat you keep there');
+update public.user_cells set last_visited = now()
+  where (cell, user_id) in (('8a3e6281baaffff', '00000000-0000-0000-0000-00000000000a'),
+    ('8a3e6281bae7fff', '00000000-0000-0000-0000-00000000000d'));
+select test.ok(public.hex_heat(now()) = 1 and abs(public.hex_heat(now() - interval '30 days') - 0.5) < 1e-9
+  and public.hex_heat(null) = 0 and public.hex_heat(now() + interval '1 day') = 1, 'heat halves every 30 days');
+select test.ok(public.warmth_goal() = 50, 'the weekly goal is 50%');
 set role authenticated;
 select test.throws($$ select * from public.district_warmth('zamalek') $$, 'district ids are checked');
 

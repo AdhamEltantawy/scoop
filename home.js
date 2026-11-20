@@ -1,7 +1,7 @@
 /* Scoop home panel: two reasons to walk, every time you open the app.
  *
  * Signed in, in a known district, the card on top of the map shows your
- * district (how warm it is against its 80% weekly goal, your share, how many
+ * district (the average heat of its hexes against a 50% weekly goal, your share, how many
  * neighbours keep it warm) and, if you're in one, your circle (km together
  * against its goal, its streak, the next walk). Switching tabs switches the
  * map's warmth layer. Your own hexes, points and km² move to Me. Signed out
