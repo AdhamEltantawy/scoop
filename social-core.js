@@ -489,7 +489,7 @@
   }
 
   /** A district's weekly warmth goal, in %. Keep in sync with warmth_goal(). */
-  const WARMTH_GOAL = 80;
+  const WARMTH_GOAL = 50;
 
   /** About five minutes on foot. */
   const NEAR_METERS = 400;

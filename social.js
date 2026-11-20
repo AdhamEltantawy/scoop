@@ -831,7 +831,7 @@
         e.currentTarget.setAttribute('aria-checked', String(communityOn));
         drawCommunity();
       },
-    }, h('span', {}, 'Community map', h('small', {}, 'Hexes you and your friends explored. Tap one to see who got there first.')),
+    }, h('span', {}, 'Community map', h('small', {}, 'How warm every hex is, whoever walked it. Tap one for how many explorers; friends’ names show.')),
     h('span', { class: 'switch' }, h('span'))) : null);
 
     if (!profile) {
@@ -1418,7 +1418,7 @@
   const communityLayer = L.layerGroup([], { pane: 'community' }).addTo(map);
   let communityOn = false;
   let communityKey = '';
-  /** @type {Map<string, {explorers:number, first_username:string}>} */
+  /** @type {Map<string, {heat:number, explorers:number, mine:boolean, first_username:string|null}>} */
   let communityCells = new Map();
   let communityTimer = null;
 
@@ -1450,13 +1450,14 @@
       if (key === communityKey) return;
       communityKey = key;
       try {
-        const rows = check(await sb.rpc('collective_map', { cells8 }));
+        // Every hex anyone walked, as warm as the district number counts it.
+        const rows = check(await sb.rpc('community_heat', { cells8 })).filter((r) => r.heat >= 0.03);
         communityCells = new Map(rows.map((r) => [r.cell, r]));
         communityLayer.clearLayers();
         for (const r of rows) {
           L.polygon(h3.cellToBoundary(r.cell), {
             pane: 'community', stroke: false, interactive: false,
-            fillColor: S.COLORS.community, fillOpacity: Math.min(0.15 + 0.1 * r.explorers, 0.65),
+            fillColor: S.COLORS.community, fillOpacity: 0.08 + 0.57 * r.heat,
           }).addTo(communityLayer);
         }
       } catch (err) {
@@ -1471,8 +1472,9 @@
     const r = communityCells.get(h3.latLngToCell(e.latlng.lat, e.latlng.lng, S.BASE_RES));
     if (!r) return;
     L.popup().setLatLng(e.latlng).setContent(h('div', {},
-      h('b', {}, `${r.explorers} explorer${r.explorers === 1 ? '' : 's'}`), h('br'),
-      `First here: ${r.first_username}`)).openOn(map);
+      h('b', {}, `${Math.round(r.heat * 100)}% warm`), h('br'),
+      `${r.explorers} explorer${r.explorers === 1 ? '' : 's'}`,
+      r.first_username ? h('span', {}, h('br'), `First here: ${r.first_username}`) : null)).openOn(map);
   });
 
   document.addEventListener('scoop:render', (e) => {

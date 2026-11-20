@@ -274,7 +274,7 @@ the walk ends they become ember (just walked).
 | Layer | Look | When visible |
 | --- | --- | --- |
 | Basemap | OSM (default), Esri streets, Humanitarian, Satellite | Always; picked in Settings |
-| Community map | Purple fills, no stroke, opacity 0.15 + 0.1 per explorer (max 0.65) | Signed in, toggled on in Settings, zoom ≥ 14 |
+| Community map | `--community` fills, no stroke, opacity 0.08 + 0.57 × heat; every hex anyone walked, fading as it cools (hidden under 3% heat) | Signed in, toggled on in Settings, zoom ≥ 14 |
 | Privacy zones | Grey dashed circle (dash 6 5), 12% fill | Only after "Show on map" or adding a zone |
 | Unexplored grid | Thin dark hex outlines (white on satellite) | Toggle on (default), zoom ≥ 12, not too many hexes in view |
 | Explored hexes | Five heat bands (below) | Always |
@@ -370,8 +370,8 @@ Opened from the gear in Me. Title "Settings" with a close (✕) button.
 2. **MAP**
    - Segmented: **OSM · Esri · Humanitarian · Satellite**
    - Toggle: **Show unexplored grid** (on by default)
-   - Toggle (signed in): **Community map** / "Hexes you and your friends
-     explored. Tap one to see who got there first." Not remembered between
+   - Toggle (signed in): **Community map** / "How warm every hex is,
+     whoever walked it. Tap one for how many explorers; friends' names show." Not remembered between
      sessions.
 3. **WALKING**
    - "Count hexes when": **Walking · 9 km/h** / **Walk + run · 16 km/h**
@@ -767,7 +767,7 @@ the feed: 👟 ⬡ 🗺️ 🌍 🏅 🚶 🔥 🌋 🏠 🤝 ☕ 📷).
 
 | | You | Friends | Everyone else signed in |
 | --- | --- | --- | --- |
-| Your hexes on a map | ✓ | ✓ (Compare, Community map) | Only as a count in the community map |
+| Your hexes on a map | ✓ | ✓ (Compare, Community map) | As heat and a count in the community map, no names, no dates |
 | When you visited | ✓ | ✗ | ✗ |
 | GPS route | On device only | ✗ | ✗ |
 | Walks (distance, new hexes) | ✓ | ✓ (feed) | ✗ |
@@ -1115,7 +1115,7 @@ design work.
 | Find | Checking off someone else's landmark in its hex |
 | Privacy zone | A circle (200–800 m) whose hexes are never shared |
 | Compare | Overlay a friend's hexes on your map |
-| Community map | Hexes explored by you and friends, purple by count |
+| Community map | Every hex anyone walked, shaded by heat; only friends are named |
 | Home district / city / country | The district you chose (where you score the most until you do), and its city and country |
 | Top % | Your rank as a percentile of an area's explorers |
 | Explorer | How anyone who isn't your friend appears |
@@ -1128,7 +1128,7 @@ design work.
 | Circle walk / session | One booked walk of a circle |
 | Meetup (circle) | Checking in at the meeting point; verified once two have |
 | Free skip | One missed week per circle per month that doesn't break its streak |
-| District warmth | Share of a district's walked hexes someone walked in the last 60 days; goal 80% by Sunday |
+| District warmth | Average heat of a district's walked hexes (1 right after a walk, halving every 30 days, as on the map); goal 50% by Sunday |
 | Matchup | This week's district rival: the closest warmth in the same city |
 | Open challenge | A district challenge anyone there can join, added by an admin |
 | Personal code | An invite like `ZAM-7KQ2-XM4P`: made when you share it, one person, 7 days, carries your welcome landmark; 10 wrong tries an hour per account |
