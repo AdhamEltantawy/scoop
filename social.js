@@ -2507,9 +2507,22 @@
   const PULSE_RETRY_MS = 60000;
   /** @type {{id:string|null,name:string|null}} the district you're in; none where Scoop has no district (offline with no fix, it's the last one) */
   let hood = loadJSON(HOOD_KEY, { id: null, name: null });
+  // The place the home panel shows: your district, or, where OSM has none (El
+  // Gouna), the city-level area it has (the governorate).
+  const PLACE_KEY = 'scoop.place.v1';
+  /** @type {{id:string|null,name:string|null,kind:'district'|'city'|null}} */
+  let place = loadJSON(PLACE_KEY, null) || (hood.id ? { ...hood, kind: 'district' } : { id: null, name: null, kind: null });
   let pulseBlock = null;
   let pulseAt = 0;
   let pulseLoading = null;
+
+  function cityOf(latlng) {
+    if (!Areas || !latlng) return null;
+    const a = Areas.of(h3.latLngToCell(latlng.lat, latlng.lng, S.BASE_RES));
+    if (!a || !a.city) return null;
+    const info = Areas.info(a.city);
+    return info && info.name ? { id: a.city, name: info.name } : null;
+  }
 
   function districtOf(latlng) {
     if (!Areas || !latlng) return null;
@@ -2569,12 +2582,18 @@
     if (here && (here.id !== hood.id || here.name !== hood.name)) {
       hood = here;
       saveJSON(HOOD_KEY, hood);
-      document.dispatchEvent(new CustomEvent('scoop:hood', { detail: hood }));
     } else if (!here && hood.id) {
       // You're somewhere Scoop has no district for (yet): don't keep claiming the last one.
       hood = { id: null, name: null };
       saveJSON(HOOD_KEY, hood);
-      document.dispatchEvent(new CustomEvent('scoop:hood', { detail: hood }));
+    }
+    // The district, else the city-level area; none when neither is known yet.
+    const city = here ? null : cityOf(latlng);
+    const next = here ? { ...here, kind: 'district' } : city ? { ...city, kind: 'city' } : { id: null, name: null, kind: null };
+    if (next.id !== place.id || next.name !== place.name || next.kind !== place.kind) {
+      place = next;
+      saveJSON(PLACE_KEY, place);
+      document.dispatchEvent(new CustomEvent('scoop:hood', { detail: place }));
     }
     const block = h3.latLngToCell(latlng.lat, latlng.lng, LANDMARK_BLOCK_RES);
     const fresh = block === pulseBlock && Date.now() - pulseAt < PULSE_REFRESH_MS;
@@ -2898,7 +2917,7 @@
     sb, check, fail, h, fill, sheetHead, avatar, nameOf, initialOf, fmtKm, distance, shareText, cancelled, PUBLIC_URL,
     uid, get profile() { return profile; }, get session() { return session; },
     openSignIn, hereCell, isHidden: (cell) => isHidden(cell), loadFriends, renewal,
-    hood: () => hood, hoodName, districtOf, openFirsts, forgetFirsts: () => { firstsCache = null; }, loadFirsts,
+    hood: () => hood, place: () => place, hoodName, districtOf, openFirsts, forgetFirsts: () => { firstsCache = null; }, loadFirsts,
     get homes() { return homes; },
     // Everyone's warmth layer (Settings, and the home panel's district tab).
     setCommunity: (on) => { communityOn = !!on; communityKey = ''; drawCommunity(); },

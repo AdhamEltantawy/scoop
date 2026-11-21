@@ -1313,7 +1313,12 @@ own circle's meeting point. Circles that welcome guests are **never pinned on th
 private until a guest is approved. Ranks, the weekly rival and "local" status use the derived district, so a
 commute doesn't flip them.
 
-Where Scoop has no district (El Gouna, say) there is no "You're in …" panel: the card stays the stats it always was, and the saved "last district" is cleared so it never claims one you've left. It fills in once a walk there has been looked up.
+Where OpenStreetMap has no district (El Gouna: only Egypt and the Red Sea governorate) the panel falls back to the
+city-level area: "You're in Red Sea", with the same numbers over every hex walked in it (`district_warmth()` accepts a
+city id, migration `20261126000000_area_warmth.sql`). Guest circles and landmark counts are left out there. Where
+neither is known yet (before the first fix, or a place never looked up) the card stays the stats it always was, and the
+saved place is cleared so it never claims one you've left. A server without the migration counts nothing for a city, and
+the app then keeps the stats card.
 
 Not done: the community layer still shows hexes only one person walked (with "First here: name" in the popup).
 A district-wide view makes that more visible in quiet districts; a minimum of 2-3 explorers per hex would fix it.
