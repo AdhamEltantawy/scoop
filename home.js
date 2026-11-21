@@ -32,13 +32,14 @@
   let loading = false;
 
   /**
-   * The district you're in, or null: before the first fix, or somewhere Scoop
-   * has no district for. Then the card stays the stats it always was, rather
-   * than claiming a district you aren't in.
+   * Where you are, for the panel: your district, or where OSM has none the
+   * city-level area (El Gouna: Red Sea). Null before the first fix, or when
+   * neither is known: the card stays the stats it always was, rather than
+   * claiming a place you aren't in.
    */
   function currentDistrict() {
-    const here = kit.hood();
-    return here && here.id && here.name ? { id: here.id, name: here.name } : null;
+    const here = kit.place();
+    return here && here.id && here.name ? { id: here.id, name: here.name, kind: here.kind } : null;
   }
 
   const circles = () => (window.scoopCircles ? window.scoopCircles.circles : []);
@@ -53,10 +54,12 @@
       const [[r], guests] = await Promise.all([
         sb.rpc('district_warmth', { district: d.id }).then(check),
         // Circles that welcome guests here: size and schedule, never where they meet.
-        sb.rpc('circles_near', { district: d.id }).then(check).catch(() => []),
+        d.kind === 'city' ? [] : sb.rpc('circles_near', { district: d.id }).then(check).catch(() => []),
       ]);
       warmth = { ...r, district: d, guests: guests.length };
       ['hexes', 'warm', 'pct', 'mine_warm', 'mine_week', 'explorers'].forEach((k) => { warmth[k] = Number(warmth[k]) || 0; });
+      // A server that doesn't know city ids yet counts nothing there: keep the stats card.
+      if (d.kind === 'city' && !warmth.hexes) warmth = null;
       warmthAt = Date.now();
     } catch (err) {
       // Offline: keep what we had (or the old stats card).
@@ -235,7 +238,7 @@
     }, h('span', { class: 'dot', 'aria-hidden': 'true' }), h('span', { dir: 'auto' }, label));
     fill(panel,
       h('div', { class: 'home-tabs', role: 'group', 'aria-label': 'Home' },
-        tab('place', kit.hood().id === w.district.id ? `You're in ${w.district.name}` : w.district.name, 'tab-place'),
+        tab('place', kit.place().id === w.district.id ? `You're in ${w.district.name}` : w.district.name, 'tab-place'),
         c ? tab('people', c.name, 'tab-people') : null),
       face === 'people' && c ? peopleFace(c) : placeFace(w),
       banner(w, c));

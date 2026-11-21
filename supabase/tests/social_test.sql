@@ -853,6 +853,13 @@ select test.ok(public.hex_heat(now()) = 1 and abs(public.hex_heat(now() - interv
 select test.ok(public.warmth_goal() = 50, 'the weekly goal is 50%');
 set role authenticated;
 select test.throws($$ select * from public.district_warmth('zamalek') $$, 'district ids are checked');
+reset role;
+create temp table cityhexes as select count(distinct cell) as n from public.user_cells where city = 'r2';
+grant select on cityhexes to authenticated;
+set role authenticated;
+select test.ok((select w.hexes from public.district_warmth('r2') w) = (select n from cityhexes)
+    and (select w.hexes from public.district_warmth('r2') w) > (select w.hexes from public.district_warmth('r10') w),
+  'a city works too: the same numbers over every hex walked in it');
 
 create temp table matchup as select * from public.district_matchup('r10');
 select test.ok((select rival is not null and rival <> 'r10' and pct between 0 and 100 and ends_at > now() from matchup),
