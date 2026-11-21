@@ -87,7 +87,7 @@ only, blue for friends only. The app follows the system light or dark mode.
 Sign in with an emailed code to make Scoop social:
 
 - **Friends**: add each other with an invite code or link. Friends see each
-  other's maps (not the dates), walks, check-ins, scores and home district.
+  other's maps (not the dates), walks, check-ins, scores and the district they walk most.
   Friendships last a month: in its last week you both tap *Renew*, and it only
   renews once you both have. A lapsed friendship can be renewed for 30 days.
 - **Compare**: overlay a friend's hexes on your map, with a count of hexes you
@@ -103,12 +103,11 @@ Sign in with an emailed code to make Scoop social:
   (Greater Cairo and Giza so far). Hexes in those upload straight away, and the
   server fills in their country and city (learned from tagged hexes in the
   same district, or else in the same governorate). Elsewhere a hex waits for its OSM
-  lookup, for up to 3 days. Your home district is one you choose from the
-  districts you've walked ("Make it home", a neighbourhood first; change it
-  from Me). Until you choose, it's where you score the most. It never
-  switches by itself: if another district has been warmer for you in each of
-  the last 3 weeks, the app asks once after a walk. Your home city and
-  country are the ones your home district is in.
+  lookup, for up to 3 days. There is no "my district" to choose: the home
+  panel shows the district you're standing in, with where people walk,
+  landmarks and circles. Ranks, the weekly district matchup and "local"
+  status follow the district you score most in (heat-weighted, so it moves
+  slowly), with its city and country.
 - **Leaderboards**: your friends, everyone in your district, city or
   country, or everyone anywhere, by current score or points earned this week
   or month. Outside the friends board only you and your friends are named;
