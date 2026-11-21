@@ -333,7 +333,7 @@ Opened from the Me button.
 1. **Header**: 52px avatar with green ring and initial · name ("Your map" when
    signed out) · subtitle · gear button (→ Settings).
    - Subtitle variants: "Signed out · everything stays on this phone",
-     "Pick a username to finish signing in", "Home district · Zamalek", or
+     "Pick a username to finish signing in", "Walks mostly in Zamalek", or
      "@username".
 2. **Three tiles**: score · day streak · best streak.
 3. **Signed-out promo** (tinted green panel, only when signed out): **"Walk with
@@ -460,7 +460,7 @@ Ranks).
   Everyone (only areas you have points in appear).
 - **Period** segmented: **Now · This week · This month**.
 - **Standing panel** (tinted): "You're #3 of 7 friends" / "You're #120 of 4,310
-  in Cairo" + "Top 2.8% · your home district". Or "Just you so far" / "No
+  in Cairo" + "Top 2.8% · where you walk most". Or "Just you so far" / "No
   points in X yet".
 - **Rank list**: position · dot (green you, blue friend, grey stranger) · name ·
   value. Your row is tinted green and labelled "Name (you)". Strangers show as
@@ -773,7 +773,7 @@ the feed: 👟 ⬡ 🗺️ 🌍 🏅 🚶 🔥 🌋 🏠 🤝 ☕ 📷).
 | Walks (distance, new hexes) | ✓ | ✓ (feed) | ✗ |
 | Check-ins | ✓ | ✓ (feed, pins) | ✗ |
 | Name on leaderboards | ✓ | ✓ | "Explorer" |
-| Home district | ✓ | ✓ | ✗ |
+| District you walk most | ✓ | ✓ | ✗ |
 | Who left a landmark | ✓ | ✓ | "another explorer" |
 | A landmark's contents | ✓ | After finding it | After finding it |
 | That you found their landmark | — | ✓ (the author, if you're friends) | ✗ |
@@ -797,13 +797,10 @@ not a circle walk. A circle walk summary only shows the usual Renew chip for a
 co-walker who is due.
 
 **Areas**: each hex is tagged with country, city and district (from
-OpenStreetMap, or Scoop's own outlines for Cairo/Giza). Your _home_ district is
-one you choose from the districts you've walked ("Make it home" in the firsts, or
-the district row in Me → Your areas); until you choose, it's where you score the
-most. It never switches by itself. After a walk the app asks once per district:
-with no home yet, if you just walked the district you walk most; with a home, if
-another district has been warmer for you in each of the last 3 weeks. Your home
-city and country are the ones your home district is in. Areas are never drawn on the map.
+OpenStreetMap, or Scoop's own outlines for Cairo/Giza). There is no "my district"
+to choose (removed 2026-11-24, §23): the home panel shows the district you're in, and
+ranks, the weekly matchup and "local" status follow the district you score most in,
+with its city and country. Areas are never drawn on the map.
 
 **Limits users can hit**: 3 privacy zones; 25 landmarks out at once, 3 of yours
 per hex; one check-in of each kind per hex per day; circles of 2–8 people, up to
@@ -1124,7 +1121,7 @@ design work.
 | Privacy zone | A circle (200–800 m) whose hexes are never shared |
 | Compare | Overlay a friend's hexes on your map |
 | Community map | Every hex anyone walked, shaded by heat; only friends are named |
-| Home district / city / country | The district you chose (where you score the most until you do), and its city and country |
+| Home district / city / country | The district you score most in (heat-weighted), and its city and country. Nothing to choose |
 | Top % | Your rank as a percentile of an area's explorers |
 | Explorer | How anyone who isn't your friend appears |
 | Kudos | Emoji reactions (👏 🔥 ❤️ 👣) on walks, check-ins, badges and circle walks |
@@ -1216,7 +1213,7 @@ Live function bodies were checked against the repo and match (live stores them w
 - **Home card** (replaces the idle stats card, see above): district tab (warm %, your share in blue, goal mark,
   your hexes this week, neighbours) and circle tab (km together, week status, streak, next walk), with one
   line to act on: cooling hexes near you (Show), the goal gap, the next circle walk (Open), or "Same time next
-  week?" (Book). The district tab turns the community warmth layer on.
+  week?" (Book). The district tab turns on everyone's warmth (the community layer) and outlines your circle's meeting point.
 - **Me** gains a second row of tiles: hexes, km² explored, % of your map warm.
 - **Feed**: your best landmark on top; "Someone found your landmark 🌅" (never who); kudos on check-ins and badges.
 - **Ranks** (district): "Circles in Zamalek · Thursday Walkers is #2 of 14 this week" and "One more first from
@@ -1291,7 +1288,7 @@ Live function bodies were checked against the repo and match (live stores them w
 12. **Street names** in banners ("Shagaret El Dor St is cooling"): the app has no street data, so it says
     "N of your hexes near you are cooling" instead.
 13. **The "3×" retention stat** from the design is left out until there's cohort data to back it.
-14. **A "local" badge** for finishing all six firsts (today the title changes and the Me row disappears).
+14. **A "local" badge** for finishing all five firsts (today the title changes and the Me row disappears).
 15. **An admin UI for open challenges**, instead of SQL.
 16. **Last week's matchup result** ("Zamalek won the week") on the Challenges tab.
 17. **Delete the old friend-challenge tables** once you're sure nobody needs that data.
@@ -1299,3 +1296,22 @@ Live function bodies were checked against the repo and match (live stores them w
 19. Revisit §19's remaining gaps. Several (errors only in toasts, no badge detail, no moderation) matter more
     now that strangers meet in circles: **reporting and blocking** should come before circles welcome guests
     widely.
+
+## 23. "My district" removed (2026-11-21)
+
+The home district chooser is gone: the Me row, the "Make X home" first, the post-walk "Make X home?" card and
+the 3-week switch prompt. Migration `20261125000000_derived_home.sql`:
+
+- `home_area()` is always `warmest_area()` (heat-weighted score, so it moves slowly); `profiles.home_district`,
+  `set_home_district` and `home_choices` stay only so older apps keep working, and are ignored.
+- `my_firsts().home` is that derived district; the app has five firsts, not six.
+
+The home panel's place tab is "You're in {district}", following where you stand (`scoop:hood`). It shows the
+district's warmth, your share, neighbours, landmarks, cafés and how many circles welcome guests there (size and
+schedule only, as before). While it's open the map shows everyone's warmth (the community layer) and outlines your
+own circle's meeting point. Circles that welcome guests are **never pinned on the map**: their meeting point stays
+private until a guest is approved. Ranks, the weekly rival and "local" status use the derived district, so a
+commute doesn't flip them.
+
+Not done: the community layer still shows hexes only one person walked (with "First here: name" in the popup).
+A district-wide view makes that more visible in quiet districts; a minimum of 2-3 explorers per hex would fix it.

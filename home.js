@@ -1,11 +1,13 @@
 /* Scoop home panel: two reasons to walk, every time you open the app.
  *
- * Signed in, in a known district, the card on top of the map shows your
- * district (the average heat of its hexes against a 50% weekly goal, your share, how many
- * neighbours keep it warm) and, if you're in one, your circle (km together
- * against its goal, its streak, the next walk). Switching tabs switches the
- * map's warmth layer. Your own hexes, points and km² move to Me. Signed out
- * or outside a district, the card stays the stats it always was.
+ * Signed in, in a known district, the card on top of the map shows the
+ * district you're standing in (the average heat of its hexes against a 50%
+ * weekly goal, your share, how many neighbours keep it warm, its landmarks
+ * and the circles that welcome guests) and, if you're in one, your circle (km
+ * together against its goal, its streak, the next walk). The district tab also
+ * lays where people walk over the map, and marks your circle's meeting point.
+ * Your own hexes, points and km² move to Me. Signed out or outside a district,
+ * the card stays the stats it always was.
  */
 (() => {
   'use strict';
@@ -24,29 +26,34 @@
 
   let face = 'place';
   try { face = localStorage.getItem(FACE_KEY) === 'people' ? 'people' : 'place'; } catch (e) { /* place */ }
-  /** district_warmth() for your home district, plus which district it is. */
+  /** district_warmth() for the district you're in, plus which district it is and who welcomes guests there. */
   let warmth = null;
   let warmthAt = 0;
   let loading = false;
 
-  function homeDistrict() {
-    const d = kit.homes.find((a) => a.kind === 'district');
-    if (d && d.id && d.name) return { id: d.id, name: d.name };
+  /** The district you're in (or were last in); before any, the one you walk most. */
+  function currentDistrict() {
     const here = kit.hood();
-    return here && here.id ? { id: here.id, name: here.name } : null;
+    if (here && here.id && here.name) return { id: here.id, name: here.name };
+    const d = kit.homes.find((a) => a.kind === 'district');
+    return d && d.id && d.name ? { id: d.id, name: d.name } : null;
   }
 
   const circles = () => (window.scoopCircles ? window.scoopCircles.circles : []);
 
   async function loadWarmth(force = false) {
     if (!kit.profile || loading) return;
-    const d = homeDistrict();
+    const d = currentDistrict();
     if (!d) { render(); return; }
     if (!force && warmth && warmth.district.id === d.id && Date.now() - warmthAt < WARMTH_REFRESH_MS) { render(); return; }
     loading = true;
     try {
-      const [r] = check(await sb.rpc('district_warmth', { district: d.id }));
-      warmth = { ...r, district: d };
+      const [[r], guests] = await Promise.all([
+        sb.rpc('district_warmth', { district: d.id }).then(check),
+        // Circles that welcome guests here: size and schedule, never where they meet.
+        sb.rpc('circles_near', { district: d.id }).then(check).catch(() => []),
+      ]);
+      warmth = { ...r, district: d, guests: guests.length };
       ['hexes', 'warm', 'pct', 'mine_warm', 'mine_week', 'explorers'].forEach((k) => { warmth[k] = Number(warmth[k]) || 0; });
       warmthAt = Date.now();
     } catch (err) {
@@ -98,10 +105,32 @@
     kit.setCommunity(want);
   }
 
+  // Your circle's meeting point, outlined in the circle colour. Only your own
+  // circles: a circle that welcomes guests never shows where it meets.
+  let meetLayer = null;
+  function drawMeetingPoints() {
+    if (!meetLayer) meetLayer = L.layerGroup().addTo(S.map);
+    meetLayer.clearLayers();
+    if (!warmth || !kit.profile) return;
+    for (const c of circles()) {
+      if (!c.meet_cell || kit.isHidden(c.meet_cell)) continue;
+      const color = getComputedStyle(document.documentElement).getPropertyValue('--friend').trim() || '#12805C';
+      L.polygon(h3.cellToBoundary(c.meet_cell), { weight: 3, color, fillColor: color, fillOpacity: 0.2, interactive: false })
+        .bindTooltip(c.name || 'Circle', { permanent: true, direction: 'top', className: 'meet-tip' })
+        .addTo(meetLayer);
+    }
+  }
+
+  function syncMap() {
+    syncCommunity();
+    drawMeetingPoints();
+  }
+
   function setFace(f) {
     face = f;
     try { localStorage.setItem(FACE_KEY, f); } catch (e) { /* fine */ }
-    syncCommunity();
+    // The map follows: the district tab shows everyone's warmth here.
+    syncMap();
     render();
   }
 
@@ -109,6 +138,15 @@
     const youShare = w.hexes ? Math.round((w.mine_warm / w.hexes) * 100) : 0;
     const others = Math.max(0, w.pct - youShare);
     const isNew = S.walks.length < 3;
+    const p = kit.pulse();
+    const here = p && p.district === w.district.id ? p : null;
+    const plural = (n, one, many) => `${n.toLocaleString()} ${n === 1 ? one : many}`;
+    const marks = here ? Number(here.landmarks) || 0 : 0;
+    const cafes = here ? Number(here.cafes) || 0 : 0;
+    const going = [
+      marks ? plural(marks, 'landmark', 'landmarks') : null,
+      cafes ? plural(cafes, 'café', 'cafés') : null,
+    ].filter(Boolean).join(' · ');
     return h('div', { class: 'home-face' },
       h('div', { class: 'home-big' }, h('b', {}, `${w.pct}%`), h('span', {}, `warm · goal ${core.WARMTH_GOAL}% by Sunday`)),
       h('div', { class: 'home-bar', role: 'img', 'aria-label': `${w.pct}% warm, ${youShare}% from you` },
@@ -116,7 +154,11 @@
         h('i', { class: 'goal', style: `left:${core.WARMTH_GOAL}%` })),
       h('div', { class: 'home-line' },
         h('span', {}, h('b', {}, `You: ${w.mine_week.toLocaleString()} hex${w.mine_week === 1 ? '' : 'es'} this week`), isNew ? ' · new here' : ''),
-        h('span', {}, h('b', {}, w.explorers.toLocaleString()), ` neighbour${w.explorers === 1 ? '' : 's'}`)));
+        h('span', {}, h('b', {}, w.explorers.toLocaleString()), ` neighbour${w.explorers === 1 ? '' : 's'}`)),
+      going || w.guests ? h('div', { class: 'home-line' },
+        h('span', {}, going),
+        w.guests ? h('button', { type: 'button', class: 'home-link', onclick: () => window.scoopCircles && window.scoopCircles.openIntro() },
+          `🤝 ${plural(w.guests, 'circle welcomes', 'circles welcome')} guests`) : null) : null);
   }
 
   function peopleFace(c) {
@@ -180,17 +222,18 @@
     document.body.classList.toggle('home-on', !!w);
     if (!w) {
       fill(panel);
+      syncMap();
       return;
     }
     const c = circles()[0] || null;
     if (face === 'people' && !c) face = 'place';
-    syncCommunity(); // the tab you opened on is already showing: so should its map layer
+    syncMap(); // the tab you opened on is already showing: so should its map
     const tab = (f, label, cls) => h('button', {
       type: 'button', class: `home-tab ${cls}`, 'aria-pressed': String(face === f), onclick: () => setFace(f),
     }, h('span', { class: 'dot', 'aria-hidden': 'true' }), h('span', { dir: 'auto' }, label));
     fill(panel,
       h('div', { class: 'home-tabs', role: 'group', 'aria-label': 'Home' },
-        tab('place', w.district.name, 'tab-place'),
+        tab('place', kit.hood().id === w.district.id ? `You're in ${w.district.name}` : w.district.name, 'tab-place'),
         c ? tab('people', c.name, 'tab-people') : null),
       face === 'people' && c ? peopleFace(c) : placeFace(w),
       banner(w, c));
@@ -198,10 +241,10 @@
 
   document.addEventListener('scoop:profile', (e) => {
     if (!e.detail.profile) { warmth = null; render(); return; }
-    setTimeout(() => loadWarmth(true), 1500); // after your home district is known
+    setTimeout(() => loadWarmth(true), 1500); // after the district you're in is known
   });
   document.addEventListener('scoop:circles', render);
-  document.addEventListener('scoop:home', () => loadWarmth(true)); // you chose a new home district
+  document.addEventListener('scoop:hood', () => loadWarmth(false)); // you walked into another district
   document.addEventListener('scoop:walk-stop', () => setTimeout(() => loadWarmth(true), 5000));
   // GPS fixes come every second or so: look again at most once a minute.
   let lastFixLook = 0;

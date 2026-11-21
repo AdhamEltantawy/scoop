@@ -596,8 +596,8 @@ select test.throws($$ select * from public.area_pulse('zamalek', '{}') $$, 'dist
 select test.throws($$ select * from public.area_pulse('r10', array['8a3e6281ba17fff']) $$, 'blocks are resolution 7');
 select test.throws($$ select * from public.area_pulse('r10', array_fill('873e6281bffffff'::text, array[8])) $$,
   'at most 7 blocks');
-select test.ok((select walked and left_one and home is null from public.my_firsts()),
-  'your neighbourhood firsts (home waits until you choose one)');
+select test.ok((select walked and left_one and home is not null from public.my_firsts()),
+  'your neighbourhood firsts (home is where you score most: there is no step to make it home)');
 select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-00000000000c', false);
 select test.ok((select found from public.my_firsts()), 'finding a landmark is a first');
 
@@ -996,54 +996,24 @@ delete from public.landmarks where title = 'Corner café';
 delete from public.friendships where requester = '00000000-0000-0000-0000-00000000000a' and addressee = '00000000-0000-0000-0000-00000000000c';
 delete from public.reactions;
 
--- ---------- choosing a home district ----------
--- alice walks Zamalek (r10) most. Until she chooses, that's her home.
+-- ---------- home is where you score most ----------
+-- alice walks Zamalek (r10) most. There is nothing to choose: that's her home.
 set role authenticated;
 select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-00000000000a', false);
-select test.ok((select name from public.my_areas() where kind = 'district') = 'Zamalek', 'until you choose, home is where you score most');
-select test.ok((select home is null from public.my_firsts()), 'and "make it home" is still to do');
-select test.ok((select array_agg(id || ':' || home || ':' || switch order by hexes desc) from public.home_choices()) = array['r10:false:false'],
-  'the districts you could make home: the ones you walked');
-select test.throws($$ select * from public.set_home_district('r20') $$, 'only a district you''ve walked can be home');
-select test.throws($$ update public.profiles set home_district = 'r20' where id = auth.uid() $$, 'and only through set_home_district');
+select test.ok((select name from public.my_areas() where kind = 'district') = 'Zamalek', 'home is where you score most');
+select test.ok((select home = 'r10' and home_name = 'Zamalek' from public.my_firsts()), 'and my_firsts says so');
 
--- One hex in Maadi (r20), and she makes it home although Zamalek is warmer.
+-- One hex in Maadi (r20) doesn't move it, and neither does a home chosen by an older app.
 select public.sync_cells(jsonb_build_array(
   jsonb_build_object('c', '8a3e628c24cffff', 't', test.ms(), 'a', '["r1","r2","r20"]'::jsonb)), (select a from areas_json));
-select test.ok((select array_agg(id order by hexes desc) from public.home_choices()) = array['r10', 'r20'], 'warmest first');
-select test.ok((select id = 'r20' and name = 'Maadi' from public.set_home_district(' r20 ')), 'making Maadi home');
-select test.ok((select array_agg(kind || ':' || name order by kind) from public.my_areas())
-    = array['city:Cairo', 'country:Egypt', 'district:Maadi'], 'home is the one you chose, with its city and country');
-select test.ok((select home = 'r20' and home_name = 'Maadi' from public.my_firsts()), '"make it home" is done');
-select test.ok((select home from public.home_choices() where id = 'r20') and not (select home from public.home_choices() where id = 'r10'),
-  'and marked among your choices');
-select test.ok(not exists (select 1 from public.home_choices() where switch), 'a new home isn''t second-guessed');
+select test.ok((select name from public.my_areas() where kind = 'district') = 'Zamalek', 'a hex somewhere else keeps it');
+select public.set_home_district('r20');
+select test.ok((select name from public.my_areas() where kind = 'district') = 'Zamalek', 'an old app''s chosen home is ignored');
+select test.ok((select home = 'r10' from public.my_firsts()), 'in my_firsts too');
 select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-00000000000b', false);
-select test.ok((select district_name from public.friend_stats() where username = 'alice') = 'Maadi',
-  'friends see the home you chose');
-
--- Three weeks on, alice has walked Zamalek more than Maadi in each of the last three weeks.
+select test.ok((select district_name from public.friend_stats() where username = 'alice') = 'Zamalek',
+  'friends see where she scores most');
 reset role;
-update public.profiles set home_set_at = now() - interval '22 days' where username = 'alice';
-delete from public.score_events where user_id = '00000000-0000-0000-0000-00000000000a';
-insert into public.score_events (user_id, day, country, city, district, points)
-select '00000000-0000-0000-0000-00000000000a', (now() at time zone 'utc')::date - x.ago, 'r1', 'r2', x.district, x.points
-from (values (1, 'r10', 5), (2, 'r20', 1), (9, 'r10', 5), (10, 'r20', 8)) x (ago, district, points);
-set role authenticated;
-select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-00000000000a', false);
-select test.ok(not exists (select 1 from public.home_choices() where switch), 'warmer in one week only: no question');
-reset role;
-insert into public.score_events (user_id, day, country, city, district, points)
-values ('00000000-0000-0000-0000-00000000000a', (now() at time zone 'utc')::date - 10, 'r1', 'r2', 'r10', 5),
-  ('00000000-0000-0000-0000-00000000000a', (now() at time zone 'utc')::date - 16, 'r1', 'r2', 'r10', 2)
-on conflict (user_id, day, country, city, district) do update set points = score_events.points + excluded.points;
-set role authenticated;
-select test.ok((select switch from public.home_choices() where id = 'r10'), 'warmer than home in each of the last 3 weeks: worth asking');
-select test.ok((select name from public.my_areas() where kind = 'district') = 'Maadi', 'but home never switches by itself');
-select public.set_home_district('r10');
-select test.ok(not exists (select 1 from public.home_choices() where switch), 'once switched, nothing to ask');
-reset role;
-select test.ok((select home_set_at > now() - interval '1 minute' from public.profiles where username = 'alice'), 'and the new home starts its clock');
 update public.profiles set home_district = null, home_set_at = null where username = 'alice';
 
 -- ---------- anon and account deletion ----------

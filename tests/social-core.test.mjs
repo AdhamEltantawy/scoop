@@ -335,11 +335,11 @@ test('landmark points match the server', () => {
 });
 
 test('neighbourhood firsts: counted and taken in order', () => {
-  assert.equal(core.FIRSTS.length, 6);
+  assert.equal(core.FIRSTS.length, 5);
   assert.equal(core.firstsDone(null), 0);
   assert.equal(core.nextFirst(null), 'walked');
-  const s = { walked: true, home: 'r10', found: false, met: false, coffee: true, left: false };
-  assert.equal(core.firstsDone(s), 3);
+  const s = { walked: true, found: false, met: false, coffee: true, left: false };
+  assert.equal(core.firstsDone(s), 2);
   assert.equal(core.nextFirst(s), 'found');
   assert.equal(core.nextFirst(Object.fromEntries(core.FIRSTS.map((k) => [k, true]))), null);
 });
@@ -421,7 +421,7 @@ test('personal invite codes come out of links too', () => {
 });
 
 test('new firsts: only what changed since the last celebration', () => {
-  const seen = { walked: true, home: true, found: false, met: false, coffee: false, left: false };
+  const seen = { walked: true, found: false, met: false, coffee: false, left: false };
   assert.deepEqual(core.newFirsts(seen, { ...seen, left: true }), ['left']);
   assert.deepEqual(core.newFirsts(seen, seen), []);
   // Nothing seen yet (first run of celebrations): nothing is celebrated.

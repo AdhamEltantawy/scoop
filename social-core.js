@@ -475,8 +475,8 @@
 
   // ---------- belonging: neighbourhood firsts ----------
 
-  /** The six firsts a newcomer works through, in order. Keep in sync with my_firsts(). */
-  const FIRSTS = ['walked', 'home', 'found', 'met', 'coffee', 'left'];
+  /** The five firsts a newcomer works through, in order. Keep in sync with my_firsts(). */
+  const FIRSTS = ['walked', 'found', 'met', 'coffee', 'left'];
 
   /** How many firsts are done. `state` maps each key in FIRSTS to true when done. */
   function firstsDone(state) {
@@ -491,7 +491,6 @@
   /** A glyph and short name for each first, for the progress steps. */
   const FIRST_GLYPHS = {
     walked: { glyph: '🚶', label: 'First walk' },
-    home: { glyph: '🏠', label: 'Made it home' },
     found: { glyph: '🔍', label: 'Found a landmark' },
     met: { glyph: '🤝', label: 'Walked with someone' },
     coffee: { glyph: '☕', label: 'Had a coffee' },
