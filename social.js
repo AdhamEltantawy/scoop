@@ -2505,7 +2505,7 @@
   const HOOD_KEY = 'scoop.hood.v1';
   const PULSE_REFRESH_MS = 15 * 60000;
   const PULSE_RETRY_MS = 60000;
-  /** @type {{id:string|null,name:string|null}} the district you were last in */
+  /** @type {{id:string|null,name:string|null}} the district you're in; none where Scoop has no district (offline with no fix, it's the last one) */
   let hood = loadJSON(HOOD_KEY, { id: null, name: null });
   let pulseBlock = null;
   let pulseAt = 0;
@@ -2568,6 +2568,11 @@
     const here = districtOf(latlng);
     if (here && (here.id !== hood.id || here.name !== hood.name)) {
       hood = here;
+      saveJSON(HOOD_KEY, hood);
+      document.dispatchEvent(new CustomEvent('scoop:hood', { detail: hood }));
+    } else if (!here && hood.id) {
+      // You're somewhere Scoop has no district for (yet): don't keep claiming the last one.
+      hood = { id: null, name: null };
       saveJSON(HOOD_KEY, hood);
       document.dispatchEvent(new CustomEvent('scoop:hood', { detail: hood }));
     }

@@ -31,12 +31,14 @@
   let warmthAt = 0;
   let loading = false;
 
-  /** The district you're in (or were last in); before any, the one you walk most. */
+  /**
+   * The district you're in, or null: before the first fix, or somewhere Scoop
+   * has no district for. Then the card stays the stats it always was, rather
+   * than claiming a district you aren't in.
+   */
   function currentDistrict() {
     const here = kit.hood();
-    if (here && here.id && here.name) return { id: here.id, name: here.name };
-    const d = kit.homes.find((a) => a.kind === 'district');
-    return d && d.id && d.name ? { id: d.id, name: d.name } : null;
+    return here && here.id && here.name ? { id: here.id, name: here.name } : null;
   }
 
   const circles = () => (window.scoopCircles ? window.scoopCircles.circles : []);
@@ -44,7 +46,7 @@
   async function loadWarmth(force = false) {
     if (!kit.profile || loading) return;
     const d = currentDistrict();
-    if (!d) { render(); return; }
+    if (!d) { warmth = null; render(); return; }
     if (!force && warmth && warmth.district.id === d.id && Date.now() - warmthAt < WARMTH_REFRESH_MS) { render(); return; }
     loading = true;
     try {
